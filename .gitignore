@@ -354,10 +354,6 @@ paket-files/
 **/__pycache__/
 *.pyc
 
-# Cake - Uncomment if you are using it
-#tools/**
-#!tools/packages.config
-
 # Tabs Studio
 *.tss
 
@@ -398,6 +394,28 @@ MSBuild_Logs/
 # BeatPulse healthcheck temp database
 healthchecksdb
 
+# World of Warcraft addon local files
+# Ignore common addon packaging and local runtime artifacts
+*.zip
+*.pkg
+*.bak
+*.tmp
+*.swp
+*.swo
+
+# WoW addon cache / generated files
+*.toc.bak
+*.lua.bak
+*.xml.bak
+
+# Local addon testing / debug output
+wow-addon-*.txt
+
+# Optional: ignore the classic / retail addon directories if they are generated locally
+# Uncomment these if you do not want to track local build output
+# /Interface/Addons/
+# /Interface/Glue/
+
 # Backup folder for Package Reference Convert tool in Visual Studio 2017
 MigrationBackup/
 
@@ -407,16 +425,44 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 
-# VS Code files for those working on multiple tools
-.vscode/*
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
-!.vscode/*.code-snippets
-
-# Local History for Visual Studio Code
+# Editor and IDE local settings
+.vscode/
+.vs/
+.idea/
+.ionide/
 .history/
+
+# Visual Studio / .NET local artifacts
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.rsuser
+*.dbmdl
+*.pdb
+*.cache
+
+# Build and tool output
+bin/
+obj/
+out/
+packages/
+node_modules/
+
+# Local installer / package artifacts
+*.vsix
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+
+# Backup / temp files from tooling
+MigrationBackup/
+Backup*/
+*.tmp
+*.bak
+*.log
 
 # Built Visual Studio Code Extensions
 *.vsix

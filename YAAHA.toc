@@ -1,0 +1,86 @@
+## Interface: 38002, 20506, 11509
+## Title: YAAHA
+## Notes: Yet Another Auction House Addon
+## Notes-deDE: @localization(locale="deDE", key="Notes", namespace="ToC")@
+## Notes-esES: @localization(locale="esES", key="Notes", namespace="ToC")@
+## Notes-esMX: @localization(locale="esMX", key="Notes", namespace="ToC")@
+## Notes-frFR: @localization(locale="frFR", key="Notes", namespace="ToC")@
+## Notes-itIT: @localization(locale="itIT", key="Notes", namespace="ToC")@
+## Notes-koKR: @localization(locale="koKR", key="Notes", namespace="ToC")@
+## Notes-ptBR: @localization(locale="ptBR", key="Notes", namespace="ToC")@
+## Notes-ruRU: @localization(locale="ruRU", key="Notes", namespace="ToC")@
+## Notes-zhCN: @localization(locale="zhCN", key="Notes", namespace="ToC")@
+## Notes-zhTW: @localization(locale="zhTW", key="Notes", namespace="ToC")@
+## Version: @project-version@
+## Author: Sygon/Vortgar
+## X-Author-Server: Mankrik
+## X-Author-Faction: Alliance
+## X-Author-Guild: The Nightwatch
+## X-Copyright: Copyright (c) 2026 Paul Vandersypen. All Rights Reserved
+
+## Category: Auctions
+## Category-deDE: Auktionen
+## Category-esES: Subastas
+## Category-esMX: Subastas
+## Category-frFR: Ventes
+## Category-itIT: Aste
+## Category-koKR: 경매
+## Category-ptBR: Leilões
+## Category-ruRU: Аукционы
+## Category-zhCN: 拍卖
+## Category-zhTW: 拍賣
+
+## SavedVariables: YAAHADB
+## OptionalDeps: Ace3, LibAboutPanel-2.0
+
+## X-Date: @project-date-iso@
+## X-Localizations: enUS, deDE, esES, esMX, frFR, itIT, ptBR, koKR, ruRU, zhCN, zhTW
+## IconTexture: Interface\Icons\INV_Misc_Coin_01
+
+## X-Website:
+## X-Email: psvander@gmail.com
+
+## X-Curse-Project-ID:
+## X-WoWI-ID:
+## X-Wago-ID:
+
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.xml
+Libs\AceAddon-3.0\AceAddon-3.0.xml
+Libs\AceEvent-3.0\AceEvent-3.0.xml
+Libs\AceDB-3.0\AceDB-3.0.xml
+Libs\AceLocale-3.0\AceLocale-3.0.xml
+Libs\AceConsole-3.0\AceConsole-3.0.xml
+Libs\AceGUI-3.0\AceGUI-3.0.xml
+Libs\AceConfig-3.0\AceConfig-3.0.xml
+Libs\AceComm-3.0\AceComm-3.0.xml
+Libs\AceSerializer-3.0\AceSerializer-3.0.xml
+Libs\LibAboutPanel-2.0\lib.xml
+
+Locales\enUS.lua
+Locales\deDE.lua
+Locales\esES.lua
+Locales\esMX.lua
+Locales\frFR.lua
+Locales\itIT.lua
+Locales\koKR.lua
+Locales\ptBR.lua
+Locales\ruRU.lua
+Locales\zhCN.lua
+Locales\zhTW.lua
+
+Core.lua
+Options.lua
+Data\DisenchantingData.lua
+Data\DisenchantingCollector.lua
+Modules\DataProcessing.lua
+Modules\AuctionHouseUI.lua
+Modules\Scanner.lua
+Modules\MerchantData.lua
+Modules\InventoryAverageBuy.lua
+Modules\VendorFlipTracking.lua
+Modules\SaleCollector.lua
+Modules\Tooltip.lua
+Modules\VendorDeals.lua
+Modules\Sync.lua
+API.lua

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/TradeSkillMaster/wowlua-ls/v0.30.4/editors/vscode/wowluarc.schema.json",
+  "addonRoot": true,
+  "library": [
+    "Libs/"
+  ],
+  "framexml": true,
+  "flavors": [
+    "classic",
+    "classic_era"
+  ],
+  "diagnostics": {
+    "enable": [
+      "need-check-nil",
+      "nil-index",
+      "implicit-nil-return"
+    ]
+  }
+}
