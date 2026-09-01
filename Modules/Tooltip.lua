@@ -16,6 +16,7 @@ local ItemRefShoppingTooltip1 = ItemRefShoppingTooltip1
 local ItemRefShoppingTooltip2 = ItemRefShoppingTooltip2
 local LibStub = LibStub
 local match = string.match
+local next = next
 local pairs = pairs
 local SELL_PRICE = SELL_PRICE
 local setmetatable = setmetatable
@@ -32,28 +33,31 @@ local inventoryAverageBuy = addon:GetModule("InventoryAverageBuy")
 local saleCollector = addon:GetModule("SaleCollector")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 local playerFaction, localizedPlayerFaction = UnitFactionGroup("player")
+local storage
 
+-- Ordering prefixes belong only to profile settings. Keep the stored price and
+-- trend field names unchanged; each row maps its data field to its option key.
 local auctionPriceFields = {
-	{ "minBid", "Minimum bid" },
-	{ "minBuyout", "Minimum buyout" },
-	{ "currentMarketValue", "Current market value" },
-	{ "midweekMarketValue", "3-day market value" },
-	{ "weeklyMarketValue", "7-day market value" },
-	{ "biweeklyMarketValue", "14-day market value" },
-	{ "monthlyMarketValue", "30-day market value" },
-	{ "bimonthlyMarketValue", "60-day market value" },
+	{ "minBid", "Minimum bid", "01-minBid" },
+	{ "minBuyout", "Minimum buyout", "02-minBuyout" },
+	{ "currentMarketValue", "Current market value", "03-currentMarketValue" },
+	{ "midweekMarketValue", "3-day market value", "04-midweekMarketValue" },
+	{ "weeklyMarketValue", "7-day market value", "05-weeklyMarketValue" },
+	{ "biweeklyMarketValue", "14-day market value", "06-biweeklyMarketValue" },
+	{ "monthlyMarketValue", "30-day market value", "07-monthlyMarketValue" },
+	{ "bimonthlyMarketValue", "60-day market value", "08-bimonthlyMarketValue" },
 }
 
 local vendorPriceFields = {
-	{ "vendorSell", SELL_PRICE },
-	{ "vendorBuy", "Buy from vendor" },
+	{ "vendorSell", SELL_PRICE, "12-vendorSell" },
+	{ "vendorBuy", "Buy from vendor", "13-vendorBuy" },
 }
 
 local saleFields = {
-	{ "personalSaleRate", "Personal sale rate", "rate" },
-	{ "realmSaleRate", "Realm sale rate", "rate" },
-	{ "realmSoldPerDay", "Realm sold per day", "quantity" },
-	{ "realmAverageSaleValue", "Realm average sale value", "money" },
+	{ "personalSaleRate", "Personal sale rate", "rate", "15-personalSaleRate" },
+	{ "realmSaleRate", "Realm sale rate", "rate", "16-realmSaleRate" },
+	{ "realmSoldPerDay", "Realm sold per day", "quantity", "17-realmSoldPerDay" },
+	{ "realmAverageSaleValue", "Realm average sale value", "money", "18-realmAverageSaleValue" },
 }
 
 local tooltips = {
@@ -116,14 +120,8 @@ local function FormatTrend(trend, multiplier)
 		and RED_NUMBER .. "v|r " .. change or RED_NUMBER .. "v " .. change .. "|r"
 end
 
-local function IsPriceModifierDown()
-	local modifier = addon.db.profile.tooltipPriceModifier
-	return modifier == "CTRL" and IsControlKeyDown()
-		or modifier == "SHIFT" and IsShiftKeyDown()
-end
-
 local function GetCursorStackCount(itemID)
-	if not IsPriceModifierDown() then
+	if not IsShiftKeyDown() then
 		return 1
 	end
 
@@ -153,23 +151,42 @@ local function GetItemID(tooltip)
 	return itemID and tonumber(itemID), link
 end
 
-local function GetScope()
-	-- Faction data is the useful everyday default. Alt provides an intentional,
-	-- temporary look at the neutral market without doubling every item tooltip.
-	return IsAltKeyDown() and "realm" or "factionrealm"
+local function HasAuctionData(scopeDB)
+	return scopeDB and scopeDB.auctionDB and next(scopeDB.auctionDB) ~= nil
 end
 
-local function GetScopeName(scope)
-	return scope == "realm" and FACTION_NEUTRAL or localizedPlayerFaction or playerFaction
+local function GetContext(scope)
+	if scope == "realm" then
+		return scope, addon.db.realm, FACTION_NEUTRAL
+	elseif scope == "factionrealm" then
+		return scope, addon.db.factionrealm, localizedPlayerFaction or playerFaction
+	end
+
+	-- ALT is intentionally checked first so neutral wins when both auction-house
+	-- modifiers are held. An unavailable alternate view falls back to faction data.
+	if IsAltKeyDown() then
+		if HasAuctionData(addon.db.realm) then
+			return "realm", addon.db.realm, FACTION_NEUTRAL
+		end
+	elseif IsControlKeyDown() then
+		storage = storage or addon:GetModule("Storage")
+		local oppositeDB, oppositeName = storage:GetOppositeFactionData()
+		if HasAuctionData(oppositeDB) then
+			return "opposite", oppositeDB, oppositeName
+		end
+	end
+	return "factionrealm", addon.db.factionrealm, localizedPlayerFaction or playerFaction
 end
 
 function module:AddItemData(tooltip, itemID, scope)
-	scope = scope or GetScope()
-	local data = addon.db[scope].auctionDB[itemID]
-	local disenchant = disenchantingData:GetValue(itemID, scope)
+	local activeScope, scopeDB, scopeName = GetContext(scope)
+	local data = scopeDB.auctionDB[itemID]
+	local priceScope = activeScope == "realm" and "realm" or "factionrealm"
+	local disenchant = disenchantingData:GetValue(itemID, priceScope, scopeDB.auctionDB)
 	local inventoryBuy = inventoryAverageBuy:GetValue(itemID)
-	local personalSaleRate = saleCollector:GetPersonalSaleData(itemID, scope)
-	local realmSaleRate, realmSoldPerDay, realmAverageSaleValue = saleCollector:GetRealmSaleData(itemID, scope)
+	local personalSaleRate = saleCollector:GetPersonalSaleData(itemID, priceScope, scopeDB)
+	local realmSaleRate, realmSoldPerDay, realmAverageSaleValue = saleCollector:GetRealmSaleData(
+		itemID, priceScope, scopeDB)
 	local _, _, _, _, _, _, _, _, _, _, vendorSell = C_Item.GetItemInfo(itemID)
 	local vendorBuy = addon.db.global.vendorBuyPrices[itemID]
 	if not data and not disenchant and not inventoryBuy and personalSaleRate == nil
@@ -185,7 +202,7 @@ function module:AddItemData(tooltip, itemID, scope)
 		if not addedHeader then
 			tooltip:AddLine(" ")
 			tooltip:AddLine("YAAHA", 1, 0.82, 0)
-			tooltip:AddLine(format("----- %s -----", GetScopeName(scope)), 0.75, 0.75, 0.75)
+			tooltip:AddLine(format("----- %s -----", scopeName), 0.75, 0.75, 0.75)
 			addedHeader = true
 		end
 	end
@@ -203,7 +220,7 @@ function module:AddItemData(tooltip, itemID, scope)
 		local field = auctionPriceFields[index]
 		local key = field[1]
 		local value = data[key]
-		if settings[key] and value and value > 0 then
+		if settings[field[3]] and value and value > 0 then
 			local display = addon:FormatMoney(value * multiplier)
 			local trend = key ~= "currentMarketValue" and data.trends and FormatTrend(data.trends[key], multiplier)
 			if trend then
@@ -213,7 +230,7 @@ function module:AddItemData(tooltip, itemID, scope)
 		end
 	end
 
-	if settings.auctionQuantity and data.auctionQuantity and data.auctionQuantity >= 1 then
+	if settings["09-auctionQuantity"] and data.auctionQuantity and data.auctionQuantity >= 1 then
 		AddLine(AUCTIONS, AUCTION_HOUSE_BROWSE_HEADER_QUANTITY, FormatQuantity(data.auctionQuantity))
 	end
 
@@ -221,7 +238,7 @@ function module:AddItemData(tooltip, itemID, scope)
 		local field = vendorPriceFields[index]
 		local key = field[1]
 		local value = key == "vendorSell" and vendorSell or vendorBuy
-		if settings[key] and value and value > 0 then
+		if settings[field[3]] and value and value > 0 then
 			local label = key == "vendorSell" and field[2] or L[field[2]]
 			AddLine(L["Vendor prices"], label, addon:FormatMoney(value * multiplier))
 		end
@@ -234,7 +251,7 @@ function module:AddItemData(tooltip, itemID, scope)
 			or key == "realmSaleRate" and realmSaleRate
 			or key == "realmSoldPerDay" and realmSoldPerDay
 			or key == "realmAverageSaleValue" and realmAverageSaleValue or data[key]
-		if settings[key] and value ~= nil then
+		if settings[field[4]] and value ~= nil then
 			if kind == "rate" and value >= 0 and value <= 1 then
 				AddLine(L["Sales"], L[field[2]], FormatRate(value))
 			elseif kind == "quantity" and value >= 0 then
@@ -244,12 +261,12 @@ function module:AddItemData(tooltip, itemID, scope)
 			end
 		end
 	end
-	if settings.inventoryAverageBuy and inventoryBuy and inventoryBuy > 0 then
+	if settings["14-inventoryAverageBuy"] and inventoryBuy and inventoryBuy > 0 then
 		AddLine(L["Purchases"], L["Inventory average buy"],
 			addon:FormatMoney(inventoryBuy * multiplier))
 	end
 
-	if disenchant and settings.breakdownResults then
+	if disenchant and settings["11-breakdownResults"] then
 		for index = 1, #disenchant.results do
 			local result = disenchant.results[index]
 			local materialName, materialLink = C_Item.GetItemInfo(result.itemID)
@@ -263,7 +280,7 @@ function module:AddItemData(tooltip, itemID, scope)
 			AddLine(L["Breakdown"], label, value)
 		end
 	end
-	if disenchant and settings.breakdownValue then
+	if disenchant and settings["10-breakdownValue"] then
 		AddLine(L["Breakdown"], L["Expected breakdown value"],
 			disenchant.expectedValue and addon:FormatMoney(disenchant.expectedValue, true) or "--")
 	end

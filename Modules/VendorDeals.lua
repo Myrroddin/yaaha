@@ -458,11 +458,9 @@ function module:ProcessCurrentPage()
 		nextResultIndex = 1
 		ScheduleSearch()
 	else
-		if currentRequest.pendingPurchase and not currentRequest.foundListing then
-			-- A completed live query which cannot find the exact auction means the old
-			-- bid was resolved, cancelled, or bought. It no longer needs future checks.
-			saleCollector:DiscardPendingPurchase(currentRequest.pendingPurchase)
-		end
+		-- A missing auction is ambiguous: another buyer may have taken it, or our bid
+		-- may have won and its invoice may not have reached the mailbox yet. Preserve
+		-- pending bids until an invoice resolves them or their safety window expires.
 		AdvanceRequest()
 	end
 end

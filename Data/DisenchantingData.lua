@@ -295,36 +295,34 @@ function module:GetResults(itemInfo)
 
 	local results = CopyResults(range)
 	local sampleCount = 0
-	if isWrath and itemLevel >= 130 then
-		local learned = addon.db.global.disenchantData[GetLearnedKey(classID, quality, itemLevel)]
-		if learned and learned.samples > 0 then
-			sampleCount = learned.samples
-			local byItemID = {}
-			for index = 1, #results do
-				local result = results[index]
-				local observation = learned.results[result.itemID]
-				byItemID[result.itemID] = result
-				-- Every disenchant is also a non-occurrence for each material it did
-				-- not produce, so every baseline result must share the larger divisor.
-				result.chance = (result.chance * STATIC_SAMPLE_WEIGHT + (observation and observation.occurrences or 0)) / (STATIC_SAMPLE_WEIGHT + sampleCount)
-				result.expectedQuantity = (result.expectedQuantity * STATIC_SAMPLE_WEIGHT + (observation and observation.quantity or 0)) / (STATIC_SAMPLE_WEIGHT + sampleCount)
-				if observation then
-					result.minQuantity = observation.minQuantity and min(result.minQuantity, observation.minQuantity) or result.minQuantity
-					result.maxQuantity = observation.maxQuantity and max(result.maxQuantity, observation.maxQuantity) or result.maxQuantity
-				end
+	local learned = addon.db.global.disenchantData[GetLearnedKey(classID, quality, itemLevel)]
+	if learned and learned.samples > 0 then
+		sampleCount = learned.samples
+		local byItemID = {}
+		for index = 1, #results do
+			local result = results[index]
+			local observation = learned.results[result.itemID]
+			byItemID[result.itemID] = result
+			-- Every disenchant is also a non-occurrence for each material it did
+			-- not produce, so every baseline result must share the larger divisor.
+			result.chance = (result.chance * STATIC_SAMPLE_WEIGHT + (observation and observation.occurrences or 0)) / (STATIC_SAMPLE_WEIGHT + sampleCount)
+			result.expectedQuantity = (result.expectedQuantity * STATIC_SAMPLE_WEIGHT + (observation and observation.quantity or 0)) / (STATIC_SAMPLE_WEIGHT + sampleCount)
+			if observation then
+				result.minQuantity = observation.minQuantity and min(result.minQuantity, observation.minQuantity) or result.minQuantity
+				result.maxQuantity = observation.maxQuantity and max(result.maxQuantity, observation.maxQuantity) or result.maxQuantity
 			end
-			for materialID, observation in pairs(learned.results) do
-				local result = byItemID[materialID]
-				if not result then
-					result = {
-						itemID = materialID,
-						chance = observation.occurrences / (STATIC_SAMPLE_WEIGHT + sampleCount),
-						minQuantity = observation.minQuantity,
-						maxQuantity = observation.maxQuantity,
-						expectedQuantity = observation.quantity / (STATIC_SAMPLE_WEIGHT + sampleCount),
-					}
-					results[#results + 1] = result
-				end
+		end
+		for materialID, observation in pairs(learned.results) do
+			local result = byItemID[materialID]
+			if not result then
+				result = {
+					itemID = materialID,
+					chance = observation.occurrences / (STATIC_SAMPLE_WEIGHT + sampleCount),
+					minQuantity = observation.minQuantity,
+					maxQuantity = observation.maxQuantity,
+					expectedQuantity = observation.quantity / (STATIC_SAMPLE_WEIGHT + sampleCount),
+				}
+				results[#results + 1] = result
 			end
 		end
 	end
@@ -344,11 +342,8 @@ function module:GetResults(itemInfo)
 end
 
 function module:RecordObservation(itemInfo, loot)
-	if not isWrath then
-		return
-	end
 	local _, _, quality, itemLevel, classID = GetItemDetails(itemInfo)
-	if not classID or itemLevel < 130 or not FindRange(classID, quality, itemLevel) then
+	if not classID or not FindRange(classID, quality, itemLevel) then
 		return
 	end
 
@@ -374,12 +369,12 @@ function module:RecordObservation(itemInfo, loot)
 	end
 end
 
-function module:GetValue(itemInfo, scope)
+function module:GetValue(itemInfo, scope, priceDB)
 	local disenchant = self:GetResults(itemInfo)
 	if not disenchant then
 		return
 	end
-	local auctionDB = addon.db[scope or "factionrealm"].auctionDB
+	local auctionDB = priceDB or addon.db[scope or "factionrealm"].auctionDB
 	local sourceOrder = {
 		"currentMarketValue", "midweekMarketValue", "weeklyMarketValue",
 		"biweeklyMarketValue", "monthlyMarketValue", "bimonthlyMarketValue",

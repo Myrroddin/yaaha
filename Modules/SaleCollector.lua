@@ -1,3 +1,4 @@
+local AUCTION_OUTBID_MAIL_SUBJECT = AUCTION_OUTBID_MAIL_SUBJECT
 local C_Item = C_Item
 local format = string.format
 local GetAuctionItemInfo = GetAuctionItemInfo
@@ -11,6 +12,8 @@ local GetServerTime = GetServerTime
 local hooksecurefunc = hooksecurefunc
 local LibStub = LibStub
 local pairs = pairs
+local stringGsub = string.gsub
+local stringMatch = string.match
 local tableRemove = table.remove
 local UnitFullName = UnitFullName
 
@@ -25,6 +28,8 @@ local moneyMail = {}
 local SECONDS_PER_DAY = 24 * 60 * 60
 local SALE_LEDGER_LIFETIME = 60 * SECONDS_PER_DAY
 local playerName, playerRealm, playerFullName
+local OUTBID_MAIL_PATTERN = AUCTION_OUTBID_MAIL_SUBJECT
+	and "^" .. stringGsub(AUCTION_OUTBID_MAIL_SUBJECT, "%%s", "(.+)") .. "$"
 
 local function InitializePlayerIdentity()
 	playerName, playerRealm = UnitFullName("player")
@@ -347,6 +352,13 @@ local function RecordBuyerCost(invoice)
 				end
 				pending.inventoryCostRecorded = true
 			end
+			-- Fast mail addons can collect an attachment before YAAHA observes the
+			-- invoice disappearing. Record the vendor-flip cost while the buyer
+			-- invoice is visible; the flag keeps the disappearance fallback idempotent.
+			if pending.vendorFlip and not pending.vendorFlipCostRecorded then
+				vendorFlipTracking:RecordPurchase(pending.itemID, pending.count, saleValue)
+				pending.vendorFlipCostRecorded = true
+			end
 			return pending
 		end
 	end
@@ -367,6 +379,25 @@ local function MoneyMailKey(mail)
 	return format("%s\031%s\031%d", mail.sender, mail.subject, mail.money)
 end
 
+local function ResolveOutbidRefund(mail)
+	local itemName = OUTBID_MAIL_PATTERN and stringMatch(mail.subject, OUTBID_MAIL_PATTERN)
+	if not itemName then
+		return false
+	end
+
+	for pendingIndex = #addon.db.char.pendingPurchases, 1, -1 do
+		local pending = addon.db.char.pendingPurchases[pendingIndex]
+		local pendingName = pending.name or C_Item.GetItemInfo(pending.itemID)
+		if pending.action == "bid" and pending.price == mail.money and pendingName == itemName then
+			-- A returned bid never entered vendor-flip accounting, so resolving it
+			-- removes only the pending auction metadata and leaves profit unchanged.
+			tableRemove(addon.db.char.pendingPurchases, pendingIndex)
+			return true
+		end
+	end
+	return false
+end
+
 local function CollectAuctionInvoice(invoice)
 	local saleValue = invoice.bid and invoice.bid > 0 and invoice.bid or invoice.buyout
 
@@ -379,8 +410,9 @@ local function CollectAuctionInvoice(invoice)
 					and (not pending.seller or not addon.db.global.alts[pending.seller]) then
 					inventoryAverageBuy:RecordPurchase(pending.itemID, pending.count, saleValue)
 				end
-				if pending.vendorFlip then
+				if pending.vendorFlip and not pending.vendorFlipCostRecorded then
 					vendorFlipTracking:RecordPurchase(pending.itemID, pending.count, saleValue)
+					pending.vendorFlipCostRecorded = true
 				end
 				tableRemove(addon.db.char.pendingPurchases, pendingIndex)
 				return
@@ -447,7 +479,9 @@ local function CacheAuctionInvoices()
 		if remainingMoneyMail[key] and remainingMoneyMail[key] > 0 then
 			remainingMoneyMail[key] = remainingMoneyMail[key] - 1
 		else
-			vendorFlipTracking:RecordMailProceeds(mail.sender, mail.subject, mail.money)
+			if not ResolveOutbidRefund(mail) then
+				vendorFlipTracking:RecordMailProceeds(mail.sender, mail.subject, mail.money)
+			end
 		end
 	end
 	moneyMail = currentMoneyMail
@@ -475,7 +509,7 @@ local function RecordPendingPurchase(listType, index, price, action)
 		return
 	end
 
-	local _, _, count, _, _, _, _, minBid, _, buyout, _, _, _, owner, ownerFullName, _, itemID = GetAuctionItemInfo(listType, index)
+	local name, _, count, _, _, _, _, minBid, _, buyout, _, _, _, owner, ownerFullName, _, itemID = GetAuctionItemInfo(listType, index)
 	if not itemID or not count or count < 1 then
 		return
 	end
@@ -497,6 +531,7 @@ local function RecordPendingPurchase(listType, index, price, action)
 			-- Keeping one record prevents repeated searches for each bid increment.
 			purchase.buyout = buyout
 			purchase.minBid = minBid
+			purchase.name = name
 			purchase.price = price
 			purchase.timestamp = now
 			purchase.vendorSell = vendorSell
@@ -506,6 +541,7 @@ local function RecordPendingPurchase(listType, index, price, action)
 			purchase.action = action or purchase.action
 			purchase.buyout = buyout or purchase.buyout
 			purchase.minBid = minBid or purchase.minBid
+			purchase.name = name or purchase.name
 			purchase.vendorSell = vendorSell or purchase.vendorSell
 			purchase.vendorFlip = purchase.vendorFlip or vendorFlip
 			return purchase
@@ -517,6 +553,7 @@ local function RecordPendingPurchase(listType, index, price, action)
 		action = action,
 		buyout = buyout,
 		minBid = minBid,
+		name = name,
 		scope = scope,
 		seller = ownerFullName or owner and playerRealm and owner .. "-" .. playerRealm or owner,
 		price = price,
@@ -586,8 +623,9 @@ function module:PruneRealmSales()
 	PruneAllRealmSales()
 end
 
-function module:GetRealmSaleData(itemID, scope)
-	local data = addon.db[scope].realmSales[itemID]
+function module:GetRealmSaleData(itemID, scope, scopeDB)
+	scopeDB = scopeDB or addon.db[scope]
+	local data = scopeDB.realmSales[itemID]
 	if not data then
 		return
 	end
@@ -601,7 +639,7 @@ function module:GetRealmSaleData(itemID, scope)
 		totalSaleValue = totalSaleValue + observation.totalSaleValue
 	end
 	if attempted == 0 and sold == 0 then
-		addon.db[scope].realmSales[itemID] = nil
+		scopeDB.realmSales[itemID] = nil
 		return
 	end
 
@@ -609,8 +647,9 @@ function module:GetRealmSaleData(itemID, scope)
 		sold > 0 and totalSaleValue / sold or nil
 end
 
-function module:GetPersonalSaleData(itemID, scope)
-	local data = addon.db[scope].personalSales[itemID]
+function module:GetPersonalSaleData(itemID, scope, scopeDB)
+	scopeDB = scopeDB or addon.db[scope]
+	local data = scopeDB.personalSales[itemID]
 	if not data or data.attempted <= 0 then
 		return
 	end

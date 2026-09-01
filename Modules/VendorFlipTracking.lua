@@ -107,7 +107,7 @@ end
 
 function module:RefreshDisplay()
 	if profitText then
-		profitText:SetFormattedText(L["Profit: %s"], self:GetFormattedProfit())
+		profitText:SetFormattedText(L["Vendor flip profit: %s"], self:GetFormattedProfit())
 	end
 	AceConfigRegistry:NotifyChange("YAAHA")
 end

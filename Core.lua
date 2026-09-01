@@ -31,6 +31,7 @@ local defaults = {
 	},
 	factionrealm = {
 		auctionDB = {},
+		compressedAuctionDB = nil,
 		auctionStats = {},
 		disenchantList = {},
 		knownProfessions = {
@@ -58,25 +59,25 @@ local defaults = {
 		auctionHouseOpeningPage = "browse",
 		coinDisplayStyle = "texture",
 		formatLargeNumbers = true,
-		includeBreakEvenVendorFlips = false,
+		includeBreakEvenVendorFlips = true,
 		profitConsiderations = {
 			["*"] = true,
 		},
 		sendAndReceiveFactionRealm = true,
 		sendAndReceiveRealm = true,
 		trendDisplay = "percent",
-		tooltipPriceModifier = "SHIFT",
 		tooltip = {
-			minBuyout = true,
-			currentMarketValue = true,
-			midweekMarketValue = true,
-			vendorBuy = true,
-			vendorSell = true,
+			["02-minBuyout"] = true,
+			["03-currentMarketValue"] = true,
+			["04-midweekMarketValue"] = true,
+			["12-vendorSell"] = true,
+			["13-vendorBuy"] = true,
 			["*"] = false,
 		},
 	},
 	realm = {
 		auctionDB = {},
+		compressedAuctionDB = nil,
 		auctionStats = {},
 		disenchantList = {},
 		millingList = {},
@@ -94,6 +95,7 @@ local char, factionrealm, global, profile, realm
 
 function addon:OnInitialize()
 	self.db = LibStub("AceDB-3.0"):New("YAAHADB", defaults, true)
+	self:GetModule("Storage"):RestoreAuctionData()
 
 	-- Bidder information may omit the realm. Remember both forms for every
 	-- character which loads YAAHA so vendor deals never compete with an account alt.
@@ -104,9 +106,17 @@ function addon:OnInitialize()
 	end
 
 	local options = self:GetOptions()
+	options.args.profiles = LibStub("AceDBOptions-3.0"):GetOptionsTable(self.db)
+	options.args.profiles.order = 900
 
 	LibStub("AceConfig-3.0"):RegisterOptionsTable("YAAHA", options)
 	AceConfigDialog:AddToBlizOptions("YAAHA")
+
+	self:RegisterChatCommand("yaaha", "OpenConfig")
+end
+
+function addon:OpenConfig()
+	AceConfigDialog:Open("YAAHA")
 end
 
 function addon:FormatMoney(copper, showZero, numberColor)
