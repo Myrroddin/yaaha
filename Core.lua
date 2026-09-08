@@ -15,10 +15,17 @@ local UnitFullName = UnitFullName
 
 ---@class YAAHA: AceAddon, AceComm-3.0, AceConsole-3.0, AceSerializer-3.0, LibAboutPanel-2.0
 ---@field db AceDBObject-3.0!
+---@field brokerObject table?
 ---@field FireAPIEvent fun(self: YAAHA, event: string, ...)
 ---@field GetOptions fun(self: YAAHA): table
+---@field RefreshBrokerText fun(self: YAAHA)
 local addon = LibStub("AceAddon-3.0"):NewAddon("YAAHA", "AceComm-3.0", "AceConsole-3.0", "AceSerializer-3.0", "LibAboutPanel-2.0")
 local AceConfigDialog = LibStub("AceConfigDialog-3.0")
+local LibDataBroker = LibStub("LibDataBroker-1.1")
+local LibDBIcon = LibStub("LibDBIcon-1.0")
+local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
+
+local BROKER_ICON = "Interface\\Icons\\INV_Misc_Coin_01"
 
 local defaults = {
 	char = {
@@ -51,6 +58,13 @@ local defaults = {
 		},
 		disenchantData = {},
 		limitedVendorItems = {},
+		minimap = {
+			hide = false,
+			lock = true,
+			lockOnDegree = true,
+			minimapPos = 90,
+			showInCompartment = true,
+		},
 		millingData = {},
 		prospectData = {},
 		vendorBuyPrices = {},
@@ -59,12 +73,13 @@ local defaults = {
 		auctionHouseOpeningPage = "browse",
 		coinDisplayStyle = "texture",
 		formatLargeNumbers = true,
-		includeBreakEvenVendorFlips = true,
+		includeBreakEvenDeals = true,
 		profitConsiderations = {
 			["*"] = true,
 		},
 		sendAndReceiveFactionRealm = true,
 		sendAndReceiveRealm = true,
+		sendAndReceiveOppositeFaction = true,
 		trendDisplay = "percent",
 		tooltip = {
 			["02-minBuyout"] = true,
@@ -93,6 +108,33 @@ local defaults = {
 
 local char, factionrealm, global, profile, realm
 
+function addon:RefreshBrokerText()
+	if self.brokerObject then
+		self.brokerObject.text = self:GetModule("VendorFlipTracking"):GetFormattedProfit()
+	end
+end
+
+local function InitializeBroker()
+	addon.brokerObject = LibDataBroker:NewDataObject("YAAHA", {
+		type = "data source",
+		tocname = "YAAHA",
+		label = "YAAHA",
+		icon = BROKER_ICON,
+		text = addon:GetModule("VendorFlipTracking"):GetFormattedProfit(),
+		OnClick = function()
+			addon:OpenConfig()
+		end,
+		OnTooltipShow = function(tooltip)
+			tooltip:AddLine("YAAHA")
+			tooltip:AddLine(format(L["Vendor flip profit: %s"],
+				addon:GetModule("VendorFlipTracking"):GetFormattedProfit()))
+			tooltip:AddLine(L["Click for configuration."])
+			tooltip:Show()
+		end,
+	})
+	LibDBIcon:Register("YAAHA", addon.brokerObject, addon.db.global.minimap)
+end
+
 function addon:OnInitialize()
 	self.db = LibStub("AceDB-3.0"):New("YAAHADB", defaults, true)
 	self:GetModule("Storage"):RestoreAuctionData()
@@ -113,6 +155,7 @@ function addon:OnInitialize()
 	AceConfigDialog:AddToBlizOptions("YAAHA")
 
 	self:RegisterChatCommand("yaaha", "OpenConfig")
+	InitializeBroker()
 end
 
 function addon:OpenConfig()

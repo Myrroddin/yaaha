@@ -5,52 +5,44 @@ local FACTION_NEUTRAL = FACTION_NEUTRAL
 local hooksecurefunc = hooksecurefunc
 local ipairs = ipairs
 local LibStub = LibStub
+local OPTIONS = OPTIONS
 local pairs = pairs
 local PanelTemplates_SetNumTabs = PanelTemplates_SetNumTabs
 local PanelTemplates_SetTab = PanelTemplates_SetTab
 local PanelTemplates_TabResize = PanelTemplates_TabResize
 local PlaySound = PlaySound
-local SEARCH = SEARCH
 local SOUNDKIT = SOUNDKIT
 local type = type
 local UnitFactionGroup = UnitFactionGroup
 local UNKNOWN = UNKNOWN
 
-local playerFaction = UnitFactionGroup("player")
+local playerFaction, localizedPlayerFaction = UnitFactionGroup("player")
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("AuctionHouseUI", "AceEvent-3.0")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
 local auctionFrame, workspace, yaahaTab
-local pageButtons = {}
+local pageIndices = {}
 local pages = {}
-local selectedPage = "search"
+local selectedPage = "post"
 local scopeText, statusText
 
 local pageDefinitions = {
 	{
-		key = "search",
-		label = SEARCH,
-		title = SEARCH,
-		description = L["Find a specific item, a batch of items, or an imported list of itemIDs."],
-	},
-	{
 		key = "post",
 		label = AUCTION_HOUSE_FRAME_TITLE_SELL,
-		title = AUCTION_HOUSE_FRAME_TITLE_SELL,
-		description = L["Create and manage auction listings."],
+	},
+	{
+		key = "search",
+		label = L["Shopping"],
 	},
 	{
 		key = "cancelling",
 		label = L["Cancelling"],
-		title = L["Cancel undercut auctions"],
-		description = L["Find and quickly cancel your auctions which have been undercut."],
 	},
 	{
 		key = "deals",
 		label = L["Deals"],
-		title = L["Find profitable deals"],
-		description = L["Find vendor, disenchanting, milling, and prospecting opportunities."],
 	},
 }
 
@@ -80,19 +72,15 @@ end
 
 local function SelectPage(pageKey)
 	if not pages[pageKey] then
-		pageKey = "search"
+		pageKey = "post"
 	end
 
 	for key, page in pairs(pages) do
 		page:SetShown(key == pageKey)
-		if key == pageKey then
-			pageButtons[key]:LockHighlight()
-		else
-			pageButtons[key]:UnlockHighlight()
-		end
 	end
 
 	selectedPage = pageKey
+	PanelTemplates_SetTab(workspace, pageIndices[pageKey])
 end
 
 local function ShowWorkspace(pageKey)
@@ -121,34 +109,28 @@ local function OpenConfiguredPage()
 	end
 end
 
-local function CreatePage(definition, previousButton)
-	local button = CreateFrame("Button", nil, workspace, "UIPanelButtonTemplate")
-	button:SetSize(105, 22)
+local function CreatePage(definition, index, previousButton)
+	-- Named PanelTabButtonTemplate children let Blizzard's panel helpers apply the
+	-- familiar selected/unselected tab treatment instead of imitating tabs with
+	-- ordinary push buttons.
+	local button = CreateFrame("Button", "YAAHAAuctionHouseFrameTab" .. index, workspace, "PanelTabButtonTemplate")
+	button:SetID(index)
 	button:SetText(definition.label)
+	PanelTemplates_TabResize(button, 0)
 	if previousButton then
-		button:SetPoint("LEFT", previousButton, "RIGHT", 4, 0)
+		button:SetPoint("TOPLEFT", previousButton, "TOPRIGHT", -14, 0)
 	else
-		button:SetPoint("TOPLEFT", workspace, "TOPLEFT", 14, -12)
+		button:SetPoint("TOPLEFT", workspace, "TOPLEFT", 14, -68)
 	end
 	button:SetScript("OnClick", function()
 		SelectPage(definition.key)
 	end)
-	pageButtons[definition.key] = button
+	pageIndices[definition.key] = index
 
 	local page = CreateFrame("Frame", nil, workspace)
-	page:SetPoint("TOPLEFT", workspace, "TOPLEFT", 14, -66)
+	page:SetPoint("TOPLEFT", workspace, "TOPLEFT", 14, -99)
 	page:SetPoint("BOTTOMRIGHT", workspace, "BOTTOMRIGHT", -14, 14)
 	pages[definition.key] = page
-
-	local title = page:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-	title:SetPoint("TOP", page, "TOP", 0, -55)
-	title:SetText(definition.title)
-
-	local description = page:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-	description:SetPoint("TOP", title, "BOTTOM", 0, -12)
-	description:SetWidth(520)
-	description:SetJustifyH("CENTER")
-	description:SetText(definition.description)
 
 	return button
 end
@@ -176,22 +158,31 @@ local function CreateWorkspace()
 	background:SetAllPoints()
 	background:SetColorTexture(0.035, 0.035, 0.035, 1)
 
+	local optionsButton = CreateFrame("Button", "YAAHAOptionsButton", workspace, "UIPanelButtonTemplate")
+	optionsButton:SetSize(100, 22)
+	optionsButton:SetPoint("TOPLEFT", workspace, "TOPLEFT", 142, -10)
+	optionsButton:SetText(OPTIONS)
+	optionsButton:SetScript("OnClick", function()
+		addon:OpenConfig()
+	end)
+
 	scopeText = workspace:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	scopeText:SetPoint("TOPLEFT", workspace, "TOPLEFT", 14, -39)
+	scopeText:SetPoint("TOPLEFT", workspace, "TOPLEFT", 14, -42)
 	scopeText:SetWidth(300)
 	scopeText:SetJustifyH("LEFT")
 	scopeText:SetFormattedText(L["Auction house: %s"], UNKNOWN)
 
 	statusText = workspace:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	statusText:SetPoint("TOPRIGHT", workspace, "TOPRIGHT", -14, -39)
-	statusText:SetWidth(190)
+	statusText:SetPoint("TOPLEFT", workspace, "TOPLEFT", 320, -42)
+	statusText:SetPoint("TOPRIGHT", workspace, "TOPRIGHT", -14, -42)
 	statusText:SetJustifyH("RIGHT")
 	statusText:SetText(L["Scan unavailable."])
 
 	local previousButton
 	for index = 1, #pageDefinitions do
-		previousButton = CreatePage(pageDefinitions[index], previousButton)
+		previousButton = CreatePage(pageDefinitions[index], index, previousButton)
 	end
+	PanelTemplates_SetNumTabs(workspace, #pageDefinitions)
 
 	-- PanelTemplates discovers classic tabs by their AuctionFrameTabN global names.
 	-- Using the next index also allows YAAHA to coexist with addons loaded before it.
@@ -236,7 +227,8 @@ function module:SetAuctionScope(scope)
 		return
 	end
 
-	local scopeName = scope == "realm" and FACTION_NEUTRAL or scope == "factionrealm" and playerFaction or UNKNOWN
+	local scopeName = scope == "realm" and FACTION_NEUTRAL
+		or scope == "factionrealm" and (localizedPlayerFaction or playerFaction) or UNKNOWN
 	scopeText:SetFormattedText(L["Auction house: %s"], scopeName)
 end
 

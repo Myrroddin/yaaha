@@ -503,7 +503,7 @@ local function CloseMailbox()
 	moneyMail = {}
 end
 
-local function RecordPendingPurchase(listType, index, price, action)
+local function RecordPendingPurchase(listType, index, price, action, dealType)
 	local scope = scanner:GetAuctionScope()
 	if not scope or listType ~= "list" then
 		return
@@ -515,8 +515,8 @@ local function RecordPendingPurchase(listType, index, price, action)
 	end
 	local _, _, _, _, _, _, _, _, _, _, vendorSell = C_Item.GetItemInfo(itemID)
 	local vendorReturn = vendorSell and vendorSell * count or 0
-	local vendorFlip = price and price > 0 and vendorReturn > 0
-		and (addon.db.profile.includeBreakEvenVendorFlips and price <= vendorReturn or price < vendorReturn)
+	local vendorFlip = dealType == "vendor" or dealType == nil and price and price > 0 and vendorReturn > 0
+		and (addon.db.profile.includeBreakEvenDeals and price <= vendorReturn or price < vendorReturn)
 
 	local now = GetServerTime()
 	local pending = addon.db.char.pendingPurchases
@@ -540,10 +540,13 @@ local function RecordPendingPurchase(listType, index, price, action)
 			and purchase.price == price and now - purchase.timestamp <= 2 then
 			purchase.action = action or purchase.action
 			purchase.buyout = buyout or purchase.buyout
+			purchase.dealType = dealType or purchase.dealType
 			purchase.minBid = minBid or purchase.minBid
 			purchase.name = name or purchase.name
 			purchase.vendorSell = vendorSell or purchase.vendorSell
-			purchase.vendorFlip = purchase.vendorFlip or vendorFlip
+			if not purchase.dealType then
+				purchase.vendorFlip = purchase.vendorFlip or vendorFlip
+			end
 			return purchase
 		end
 	end
@@ -552,6 +555,7 @@ local function RecordPendingPurchase(listType, index, price, action)
 		count = count,
 		action = action,
 		buyout = buyout,
+		dealType = dealType,
 		minBid = minBid,
 		name = name,
 		scope = scope,
@@ -591,8 +595,8 @@ function module:PLAYER_ENTERING_WORLD()
 	self:UnregisterEvent("PLAYER_ENTERING_WORLD")
 end
 
-function module:RecordPendingPurchase(listType, index, price, action)
-	return RecordPendingPurchase(listType, index, price, action)
+function module:RecordPendingPurchase(listType, index, price, action, dealType)
+	return RecordPendingPurchase(listType, index, price, action, dealType)
 end
 
 function module:GetPendingVendorBids(scope)

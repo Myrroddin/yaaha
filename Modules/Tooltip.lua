@@ -79,7 +79,7 @@ local function TrimmedDecimal(value)
 end
 
 local function FormatRate(rate)
-	return TrimmedDecimal(rate * 100) .. "%"
+	return format(L["%s%%"], TrimmedDecimal(rate * 100))
 end
 
 local function FormatQuantity(quantity)
@@ -107,7 +107,7 @@ local function FormatTrend(trend, multiplier)
 		change = addon:FormatMoney(trend.direction == "down" and -value or value,
 			false, trend.direction == "up" and GREEN_NUMBER or RED_NUMBER)
 	else
-		change = TrimmedDecimal(trend.percent) .. "%"
+		change = format(L["%s%%"], TrimmedDecimal(trend.percent))
 	end
 
 	-- ASCII carets are font-agnostic across Classic clients. Color and orientation
@@ -202,7 +202,7 @@ function module:AddItemData(tooltip, itemID, scope)
 		if not addedHeader then
 			tooltip:AddLine(" ")
 			tooltip:AddLine("YAAHA", 1, 0.82, 0)
-			tooltip:AddLine(format("----- %s -----", scopeName), 0.75, 0.75, 0.75)
+			tooltip:AddLine(format(L["----- %s -----"], scopeName), 0.75, 0.75, 0.75)
 			addedHeader = true
 		end
 	end
@@ -271,7 +271,7 @@ function module:AddItemData(tooltip, itemID, scope)
 			local result = disenchant.results[index]
 			local materialName, materialLink = C_Item.GetItemInfo(result.itemID)
 			local label = materialLink or materialName or tostring(result.itemID)
-			local value = format("%s x%s", FormatRate(result.chance), FormatExpectedQuantity(result.expectedQuantity))
+			local value = format(L["%s x%s"], FormatRate(result.chance), FormatExpectedQuantity(result.expectedQuantity))
 			if result.missingPrice then
 				value = value .. "  |cff9d9d9d-- (" .. L["Not found in auction data"] .. ")|r"
 			else

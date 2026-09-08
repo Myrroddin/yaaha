@@ -1,6 +1,6 @@
 # YAAHA
 
-YAAHA (Yet Another Auction House AddOn) helps players understand auction-house prices, spot useful deals, and make better buying and selling decisions in World of Warcraft Classic.
+YAAHA (Yet Another Auction House AddOn) helps players understand prices, find worthwhile deals, and make better buying and selling decisions in World of Warcraft Classic.
 
 > [!IMPORTANT]
 > YAAHA is under active development and is not yet ready for a public release. Features, settings, and saved data may change while the addon is being built.
@@ -13,17 +13,17 @@ YAAHA (Yet Another Auction House AddOn) helps players understand auction-house p
 
 Mists of Pandaria Classic and modern World of Warcraft are not currently supported.
 
-## Features
+## Current features
 
 ### Auction-house scanning
 
-Start a fast, complete scan from YAAHA's auction-house window. YAAHA records the active auction house without combining Alliance, Horde, or Neutral data.
+YAAHA can quickly scan the auction house and record minimum bids, minimum buyouts, available quantities, and market values covering the current scan and the past 3, 7, 14, 30, and 60 days.
 
-Scans provide minimum bids, minimum buyouts, available quantities, and market values covering the current scan and the past 3, 7, 14, 30, and 60 days.
+Alliance, Horde, and Neutral auction-house information is kept separate. Holding Alt over an item shows Neutral information, while holding Ctrl shows information for the opposite faction when it is available.
 
-### Informative tooltips
+### Item tooltips
 
-YAAHA can add useful auction information to item tooltips, including:
+Configurable item tooltips can show:
 
 - Current and historical market values
 - Price trends
@@ -34,40 +34,44 @@ YAAHA can add useful auction information to item tooltips, including:
 - Average purchase value for items still owned
 - Disenchanting results and estimated value
 
-Tooltip entries are configurable. Hold Alt for neutral auction-house data, Ctrl for
-opposite-faction data, or Shift to multiply prices by the stack under the cursor.
+Hold Shift to multiply prices by the stack size under the cursor.
 
-### Vendor deals
+### Deals
 
-The Deals page finds auctions which may be purchased and sold to an NPC vendor for a profit. Every result is checked again before being offered.
+The Deals page currently finds vendor and disenchanting opportunities. Vendor deals may be bid on or bought immediately, while disenchanting deals use buyouts. Every deal is checked again before YAAHA offers it.
 
-YAAHA never makes a purchase automatically. The player chooses whether to bid, buy out, or skip each deal. A realm-wide running total tracks profit from qualifying vendor flips and can be reset at any time.
-
-### Market history and trends
-
-Repeated scans build a longer view of an item's market instead of relying on one moment at the auction house. YAAHA shows whether historical values are rising or falling and can display the change as either a percentage or a coin value.
+YAAHA never purchases anything automatically. The player chooses whether to bid, buy out, or skip each result. YAAHA also keeps a resettable, realm-wide total of profit earned from qualifying vendor flips.
 
 ### Sale information
 
-YAAHA follows the player's auction outcomes to calculate personal sale rates. Recent realm sale rates, quantities sold, and average sale values are also available from the player's observations and synchronized data.
+YAAHA follows auction outcomes to calculate the player's sale rate. Recent realm sale rates, quantities sold, and average sale values are also available from the player's observations and synchronized data.
 
 ### Synchronization
 
-YAAHA users can share recent auction and sale information with one another. Faction and Neutral auction houses remain separate, and either type of synchronization can be disabled in the settings.
+YAAHA can share auction and sale information with nearby players and guild members who also use the addon. Alliance, Horde, and Neutral information remains separate.
 
-### Disenchanting
+### Broker and minimap
 
-For supported items, YAAHA shows possible disenchanting materials, quantities, probabilities, and estimated values. Results can improve as players disenchant items.
+The Broker display and optional minimap button use YAAHA's auction-house coin icon. The Broker text shows the current vendor-flip profit, and clicking either icon opens YAAHA's options.
+
+## Opening the options
+
+YAAHA's options can be opened in any of these ways:
+
+- Enter `/yaaha` in chat.
+- Open **Esc > Options > AddOns > YAAHA**.
+- Click **Options** on YAAHA's auction-house tab.
+- Click YAAHA's minimap or Broker icon.
 
 ## In development
 
-YAAHA's auction-house workspace includes Search, Post, Cancelling, and Deals pages. Deals and scanning are usable foundations; the remaining pages and several related features are still being developed.
+YAAHA's auction-house workspace includes Post Auctions, Shopping, Cancelling, and Deals tabs. Scanning and the Deals tab are usable foundations; the other tabs are still being developed.
 
-Planned work includes broader auction searching and posting tools, quick cancellation of undercut auctions, prospecting, milling, and further tooltip and deal improvements.
+Planned work includes auction posting and shopping tools, quick cancellation of undercut auctions, prospecting and milling data, and additional deal and tooltip features.
 
 ## Addon developers
 
-YAAHA exposes auction and item information through the global `YAAHA_API` table. See the [public API documentation](API.md) for integration details and update callbacks.
+YAAHA exposes auction and item information through the global `YAAHA_API` table. See the [public API documentation](https://github.com/Myrroddin/yaaha/blob/main/API.md) for integration details and update callbacks.
 
 ## License
 

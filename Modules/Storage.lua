@@ -27,10 +27,19 @@ local playerFaction, localizedPlayerFaction = UnitFactionGroup("player")
 local oppositeFaction = playerFaction == "Alliance" and "Horde" or "Alliance"
 local oppositeFactionName = oppositeFaction == "Alliance" and FACTION_ALLIANCE or FACTION_HORDE
 local oppositeFactionData
+local oppositeFactionKey
 local oppositeFactionLoaded = false
 local previousPayloads = {}
 local restoreFailed = {}
 local SCOPES = { "factionrealm", "realm" }
+
+local function InitializeFactionScope(scopeDB)
+	scopeDB.auctionDB = scopeDB.auctionDB or {}
+	scopeDB.auctionStats = scopeDB.auctionStats or {}
+	scopeDB.personalSales = scopeDB.personalSales or {}
+	scopeDB.realmSales = scopeDB.realmSales or {}
+	return scopeDB
+end
 
 local function ScopeName(scope)
 	return scope == "realm" and FACTION_NEUTRAL
@@ -79,7 +88,12 @@ local function DecodeStoredAuctionDB(stored)
 	if type(stored) ~= "table" or stored.version ~= FORMAT_VERSION then
 		return
 	end
-	return DecodeAuctionDB(stored.payload) or DecodeAuctionDB(stored.backupPayload)
+	local auctionDB = DecodeAuctionDB(stored.payload)
+	if auctionDB then
+		return auctionDB, stored.payload
+	end
+	auctionDB = DecodeAuctionDB(stored.backupPayload)
+	return auctionDB, auctionDB and stored.backupPayload or nil
 end
 
 local function NormalizeRealmName(realm)
@@ -108,6 +122,7 @@ local function LoadOppositeFactionData()
 			if realm and connectedRealms[realm] then
 				candidates[#candidates + 1] = {
 					db = scopeDB,
+					key = key,
 					lastScan = scopeDB.auctionStats and scopeDB.auctionStats.lastScan or 0,
 				}
 			end
@@ -119,17 +134,36 @@ local function LoadOppositeFactionData()
 
 	for index = 1, #candidates do
 		local scopeDB = candidates[index].db
-		local auctionDB = type(scopeDB.auctionDB) == "table" and scopeDB.auctionDB
-			or DecodeStoredAuctionDB(scopeDB.compressedAuctionDB)
-		if auctionDB and next(auctionDB) then
-			oppositeFactionData = {
-				auctionDB = auctionDB,
-				personalSales = scopeDB.personalSales or {},
-				realmSales = scopeDB.realmSales or {},
-			}
+		local auctionDB, restoredPayload
+		if type(scopeDB.auctionDB) == "table" then
+			auctionDB = scopeDB.auctionDB
+		else
+			auctionDB, restoredPayload = DecodeStoredAuctionDB(scopeDB.compressedAuctionDB)
+		end
+		if auctionDB and (next(auctionDB) or next(scopeDB.realmSales or {})
+			or scopeDB.auctionStats and scopeDB.auctionStats.lastScan) then
+			oppositeFactionKey = candidates[index].key
+			oppositeFactionData = InitializeFactionScope(scopeDB)
+			oppositeFactionData.auctionDB = auctionDB
+			if scopeDB.compressedAuctionDB then
+				previousPayloads[oppositeFactionKey] = restoredPayload
+				scopeDB.compressedAuctionDB = nil
+			end
 			return
 		end
 	end
+end
+
+local function CreateOppositeFactionData()
+	local realm = GetNormalizedRealmName()
+	if not realm then
+		return
+	end
+	oppositeFactionKey = oppositeFaction .. " - " .. realm
+	local scopes = addon.db.sv.factionrealm
+	scopes[oppositeFactionKey] = scopes[oppositeFactionKey] or {}
+	oppositeFactionData = InitializeFactionScope(scopes[oppositeFactionKey])
+	return oppositeFactionData
 end
 
 local function RestoreScope(scope)
@@ -219,8 +253,29 @@ function module:GetOppositeFactionData()
 	return oppositeFactionData, oppositeFactionName
 end
 
+function module:GetOrCreateOppositeFactionData()
+	if not oppositeFactionLoaded then
+		LoadOppositeFactionData()
+	end
+	return oppositeFactionData or CreateOppositeFactionData(), oppositeFactionName
+end
+
 function module:PLAYER_LOGOUT()
 	for _, scope in pairs(SCOPES) do
 		StoreScope(scope)
+	end
+	if oppositeFactionData then
+		local key = oppositeFactionKey or oppositeFaction
+		local auctionDB = oppositeFactionData.auctionDB
+		local payload = type(auctionDB) == "table" and next(auctionDB)
+			and EncodeAuctionDB(auctionDB) or nil
+		if payload then
+			oppositeFactionData.compressedAuctionDB = {
+				version = FORMAT_VERSION,
+				payload = payload,
+				backupPayload = previousPayloads[key],
+			}
+			oppositeFactionData.auctionDB = nil
+		end
 	end
 end

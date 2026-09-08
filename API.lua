@@ -8,6 +8,7 @@ local playerFaction = UnitFactionGroup("player")
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local saleCollector = addon:GetModule("SaleCollector")
 local disenchantingData = addon:GetModule("DisenchantingData")
+local storage = addon:GetModule("Storage")
 
 -- API versions are independent of addon releases. Increment this only when a
 -- change to the public contract requires consumers to distinguish API behavior.
@@ -67,6 +68,27 @@ local API_VERSION = 1
 -- backing data and return contracts are ready for other addons to depend upon.
 ---@class YAAHA_API
 ---@field version integer Public API version.
+---@field GetVersion fun(): integer
+---@field GetItemData fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): YAAHA_API.ItemData?
+---@field GetAuctionCount fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
+---@field GetAuctionQuantity fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
+---@field GetMinBid fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
+---@field GetMinBuyout fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
+---@field GetCurrentMarketValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
+---@field GetMidweekMarketValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
+---@field GetWeeklyMarketValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
+---@field GetBiweeklyMarketValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
+---@field GetMonthlyMarketValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
+---@field GetBimonthlyMarketValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
+---@field GetLastScanTime fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
+---@field GetAuctionHouseStats fun(auctionHouseType?: YAAHA_API.AuctionHouseType): YAAHA_API.AuctionHouseStats?
+---@field GetRealmSaleRate fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): number?
+---@field GetRealmSoldPerDay fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
+---@field GetRealmAverageSaleValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
+---@field GetVendorFlipProfit fun(): integer
+---@field IsDisenchantable fun(itemID: integer): boolean
+---@field GetDisenchantResults fun(itemID: integer): YAAHA_API.DisenchantResults?
+---@field GetDisenchantValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType, fullResults?: boolean): integer|YAAHA_API.PricedDisenchantResults|nil
 ---@field RegisterCallback fun(receiver: any, event: YAAHA_API.DataUpdateEvent, method?: string|YAAHA_API.DataUpdatedCallback, arg?: any)
 ---@field UnregisterCallback fun(receiver: any, event: YAAHA_API.DataUpdateEvent)
 ---@field UnregisterAllCallbacks fun(receiver: any)
@@ -109,11 +131,22 @@ local function GetAuctionScope(auctionHouseType)
 	if auctionHouseType == playerFaction then
 		return "factionrealm"
 	end
+	if auctionHouseType == "Alliance" or auctionHouseType == "Horde" then
+		return "opposite"
+	end
+end
+
+local function GetAuctionContext(auctionHouseType)
+	local scope = GetAuctionScope(auctionHouseType)
+	if scope == "opposite" then
+		return storage:GetOppositeFactionData(), "factionrealm"
+	end
+	return scope and addon.db[scope] or nil, scope
 end
 
 local function GetAuctionDB(auctionHouseType)
-	local scope = GetAuctionScope(auctionHouseType)
-	return scope and addon.db[scope].auctionDB
+	local scopeDB = GetAuctionContext(auctionHouseType)
+	return scopeDB and scopeDB.auctionDB
 end
 
 local function NormalizeCopper(value)
@@ -142,6 +175,15 @@ local function NormalizeRate(value)
 	return floor(value * 1000 + 0.5) / 1000
 end
 
+local function NormalizeSignedCopper(value)
+	if type(value) ~= "number" then
+		return nil
+	end
+	-- Vendor-flip profit is the one public monetary value for which zero and a
+	-- negative balance are meaningful rather than indicators of missing data.
+	return value < 0 and -floor(-value + 0.5) or floor(value + 0.5)
+end
+
 local function GetItemSource(itemID, auctionHouseType)
 	if type(itemID) ~= "number" or itemID <= 0 or itemID ~= floor(itemID) then
 		return nil
@@ -161,10 +203,9 @@ local function GetRealmSaleData(itemID, auctionHouseType)
 		return
 	end
 	auctionHouseType = auctionHouseType or playerFaction
-	local scope = auctionHouseType == "Neutral" and "realm"
-		or auctionHouseType == playerFaction and "factionrealm"
-	if scope then
-		return saleCollector:GetRealmSaleData(itemID, scope)
+	local scopeDB, scope = GetAuctionContext(auctionHouseType)
+	if scopeDB then
+		return saleCollector:GetRealmSaleData(itemID, scope, scopeDB)
 	end
 end
 
@@ -277,8 +318,8 @@ end
 ---@param auctionHouseType? YAAHA_API.AuctionHouseType
 ---@return YAAHA_API.AuctionHouseStats? stats
 function API.GetAuctionHouseStats(auctionHouseType)
-	local scope = GetAuctionScope(auctionHouseType)
-	local source = scope and addon.db[scope].auctionStats
+	local scopeDB = GetAuctionContext(auctionHouseType)
+	local source = scopeDB and scopeDB.auctionStats
 	if not source or type(source.lastScan) ~= "number" or source.lastScan <= 0
 		or type(source.totalItems) ~= "number" or source.totalItems < 0
 		or type(source.totalListings) ~= "number" or source.totalListings < 0 then
@@ -314,6 +355,11 @@ end
 function API.GetRealmAverageSaleValue(itemID, auctionHouseType)
 	local _, _, value = GetRealmSaleData(itemID, auctionHouseType)
 	return NormalizeCopper(value)
+end
+
+---@return integer vendorFlipProfit
+function API.GetVendorFlipProfit()
+	return NormalizeSignedCopper(addon.db.realm.vendorFlipProfit) or 0
 end
 
 ---@param itemID integer
@@ -356,6 +402,8 @@ end
 ---@param itemID integer
 ---@param auctionHouseType? YAAHA_API.AuctionHouseType
 ---@param fullResults? boolean
+---@overload fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType, fullResults?: false): integer?
+---@overload fun(itemID: integer, auctionHouseType: YAAHA_API.AuctionHouseType|nil, fullResults: true): YAAHA_API.PricedDisenchantResults?
 ---@return integer|YAAHA_API.PricedDisenchantResults|nil value
 function API.GetDisenchantValue(itemID, auctionHouseType, fullResults)
 	if type(itemID) ~= "number" or itemID <= 0 or itemID ~= floor(itemID) then
@@ -369,7 +417,7 @@ function API.GetDisenchantValue(itemID, auctionHouseType, fullResults)
 		return nil
 	end
 	local scope = auctionDB == addon.db.realm.auctionDB and "realm" or "factionrealm"
-	local data = disenchantingData:GetValue(itemID, scope)
+	local data = disenchantingData:GetValue(itemID, scope, auctionDB)
 	if not data then
 		return nil
 	end

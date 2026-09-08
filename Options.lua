@@ -5,15 +5,30 @@ local AUCTIONS = AUCTIONS
 local BIDS = BIDS
 local BROWSE = BROWSE
 local CTRL_KEY = CTRL_KEY
+local floor = math.floor
 local format = string.format
 local GENERAL_LABEL = GENERAL_LABEL
+local HIDE = HIDE
 local LibStub = LibStub
-local SEARCH = SEARCH
+local LOCK = LOCK
+local MINIMAP_LABEL = MINIMAP_LABEL
 local SELL_PRICE = SELL_PRICE
 local SHIFT_KEY = SHIFT_KEY
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
+local LibDBIcon = LibStub("LibDBIcon-1.0")
+
+local function GetRoundedMinimapPosition(value)
+	if addon.db.global.minimap.lockOnDegree then
+		value = floor(value + 0.5)
+	end
+	return value < 1 and 1 or value > 360 and 360 or value
+end
+
+local function RefreshMinimapButton()
+	LibDBIcon:Refresh("YAAHA", addon.db.global.minimap)
+end
 
 local options
 function addon:GetOptions()
@@ -42,8 +57,8 @@ function addon:GetOptions()
 							browse = BROWSE,
 							bids = BIDS,
 							auctions = AUCTIONS,
-							yaahaSearch = "YAAHA - " .. SEARCH,
 							yaahaPost = "YAAHA - " .. AUCTION_HOUSE_FRAME_TITLE_SELL,
+							yaahaSearch = "YAAHA - " .. L["Shopping"],
 							yaahaCancelling = "YAAHA - " .. L["Cancelling"],
 							yaahaDeals = "YAAHA - " .. L["Deals"],
 						},
@@ -83,8 +98,20 @@ function addon:GetOptions()
 							addon.db.profile.sendAndReceiveFactionRealm = value
 						end
 					},
-					neutral = {
+					oppositeFaction = {
 						order = 40,
+						type = "toggle",
+						name = L["Synchronize opposite-faction auction data"],
+						desc = L["Send and receive opposite-faction auction-house data without combining it with current-faction or neutral data."],
+						get = function()
+							return addon.db.profile.sendAndReceiveOppositeFaction
+						end,
+						set = function(_, value)
+							addon.db.profile.sendAndReceiveOppositeFaction = value
+						end
+					},
+					neutral = {
+						order = 50,
 						type = "toggle",
 						name = L["Synchronize neutral auction data"],
 						desc = L["Send and receive neutral auction-house data without combining it with faction data."],
@@ -96,7 +123,7 @@ function addon:GetOptions()
 						end
 					},
 					formatLargeNumbers = {
-						order = 50,
+						order = 60,
 						type = "toggle",
 						name = L["Format large numbers"],
 						desc = L["Show large coin values with localized digit separators."],
@@ -108,20 +135,20 @@ function addon:GetOptions()
 							addon:GetModule("VendorFlipTracking"):RefreshDisplay()
 						end
 					},
-					includeBreakEvenVendorFlips = {
-						order = 60,
+					includeBreakEvenDeals = {
+						order = 70,
 						type = "toggle",
-						name = L["Include break-even vendor flips"],
-						desc = L["Include auctions whose purchase price equals the item's vendor value."],
+						name = L["Include break-even deals"],
+						desc = L["Include vendor, disenchanting, prospecting, and milling deals whose purchase price equals their expected return."],
 						get = function()
-							return self.db.profile.includeBreakEvenVendorFlips
+							return self.db.profile.includeBreakEvenDeals
 						end,
 						set = function(_, value)
-							self.db.profile.includeBreakEvenVendorFlips = value
+							self.db.profile.includeBreakEvenDeals = value
 						end
 					},
 					total = {
-						order = 70,
+						order = 80,
 						type = "description",
 						name = function()
 							local tracker = addon:GetModule("VendorFlipTracking")
@@ -129,7 +156,7 @@ function addon:GetOptions()
 						end
 					},
 					reset = {
-						order = 80,
+						order = 90,
 						type = "execute",
 						name = L["Reset vendor flip profit"],
 						confirm = L["Reset vendor flip profit and its outstanding item quantities?"],
@@ -213,6 +240,115 @@ function addon:GetOptions()
 						set = function(_, key, value)
 							addon.db.profile.tooltip[key] = value
 						end
+					}
+				}
+			},
+			minimap = {
+				order = 30,
+				type = "group",
+				name = MINIMAP_LABEL,
+				args = {
+					hide = {
+						order = 10,
+						type = "toggle",
+						name = HIDE,
+						desc = L["Hide the minimap button."],
+						get = function()
+							return addon.db.global.minimap.hide
+						end,
+						set = function(_, value)
+							addon.db.global.minimap.hide = value
+							if value then
+								LibDBIcon:Hide("YAAHA")
+							else
+								LibDBIcon:Show("YAAHA")
+							end
+							RefreshMinimapButton()
+						end
+					},
+					lock = {
+						order = 20,
+						type = "toggle",
+						name = LOCK,
+						desc = L["Lock the minimap button and prevent dragging."],
+						get = function()
+							return addon.db.global.minimap.lock
+						end,
+						set = function(_, value)
+							local minimap = addon.db.global.minimap
+							if value then
+								LibDBIcon:Lock("YAAHA")
+							else
+								LibDBIcon:Unlock("YAAHA")
+							end
+							-- LibDBIcon clears this key while unlocking. Restore the explicit
+							-- false value so AceDB's true default cannot make it appear locked.
+							minimap.lock = value
+							minimap.minimapPos = GetRoundedMinimapPosition(minimap.minimapPos)
+							LibDBIcon:SetButtonToPosition("YAAHA", minimap.minimapPos)
+							RefreshMinimapButton()
+						end
+					},
+					lockOnDegree = {
+						order = 30,
+						type = "toggle",
+						name = L["Precise Lock"],
+						desc = L["When locked, snap the minimap button to an exact degree."],
+						get = function()
+							return addon.db.global.minimap.lockOnDegree
+						end,
+						set = function(_, value)
+							local minimap = addon.db.global.minimap
+							minimap.lockOnDegree = value
+							minimap.minimapPos = GetRoundedMinimapPosition(minimap.minimapPos)
+							LibDBIcon:SetButtonToPosition("YAAHA", minimap.minimapPos)
+							RefreshMinimapButton()
+						end
+					},
+					addonCompartment = {
+						order = 40,
+						type = "toggle",
+						name = L["AddOn Compartment"],
+						desc = L["Show the minimap button in the addon compartment."],
+						hidden = function()
+							return not LibDBIcon:IsButtonCompartmentAvailable()
+						end,
+						get = function()
+							return addon.db.global.minimap.showInCompartment
+						end,
+						set = function(_, value)
+							local minimap = addon.db.global.minimap
+							if value then
+								LibDBIcon:AddButtonToCompartment("YAAHA")
+							else
+								LibDBIcon:RemoveButtonFromCompartment("YAAHA")
+							end
+							-- Removing a compartment entry clears the library's DB key. AceDB
+							-- needs an explicit false to override YAAHA's enabled-by-default value.
+							minimap.showInCompartment = value
+						end
+					},
+					minimapPos = {
+						order = 50,
+						type = "range",
+						name = L["Rotate Button"],
+						desc = L["Rotate the minimap button."],
+						disabled = function()
+							return addon.db.global.minimap.lock
+						end,
+						get = function()
+							return addon.db.global.minimap.minimapPos
+						end,
+						set = function(_, value)
+							local minimap = addon.db.global.minimap
+							minimap.minimapPos = GetRoundedMinimapPosition(value)
+							LibDBIcon:SetButtonToPosition("YAAHA", minimap.minimapPos)
+							RefreshMinimapButton()
+						end,
+						min = 1,
+						max = 360,
+						step = 1,
+						bigStep = 15
 					}
 				}
 			}

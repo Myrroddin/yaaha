@@ -27,7 +27,6 @@ local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("VendorFlipTracking", "AceEvent-3.0")
 local auctionHouseUI = addon:GetModule("AuctionHouseUI")
 local inventoryAverageBuy = addon:GetModule("InventoryAverageBuy")
-local scanner = addon:GetModule("Scanner")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
 local GREEN_NUMBER = "|cff20ff20"
@@ -109,6 +108,7 @@ function module:RefreshDisplay()
 	if profitText then
 		profitText:SetFormattedText(L["Vendor flip profit: %s"], self:GetFormattedProfit())
 	end
+	addon:RefreshBrokerText()
 	AceConfigRegistry:NotifyChange("YAAHA")
 end
 
@@ -185,15 +185,14 @@ local function CreateDisplay()
 		return
 	end
 	local parent = auctionHouseUI:GetScanButtonParent()
-	local scanButton = scanner:GetScanButton()
-	if not parent or not scanButton then
+	if not parent then
 		return
 	end
 
 	profitText = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	profitText:SetPoint("LEFT", scanButton, "RIGHT", 12, 0)
-	profitText:SetWidth(205)
-	profitText:SetJustifyH("LEFT")
+	profitText:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -14, -16)
+	profitText:SetWidth(300)
+	profitText:SetJustifyH("RIGHT")
 	module:RefreshDisplay()
 end
 
@@ -386,7 +385,7 @@ function module:TRADE_CLOSED()
 		inventoryAverageBuy:RecordPurchase(incomingItemID, incomingQuantity, tradeSnapshot.moneyGiven)
 		local _, _, _, _, _, _, _, _, _, _, vendorSell = C_Item.GetItemInfo(incomingItemID)
 		local vendorReturn = vendorSell and vendorSell * incomingQuantity or 0
-		if vendorReturn > 0 and (addon.db.profile.includeBreakEvenVendorFlips
+		if vendorReturn > 0 and (addon.db.profile.includeBreakEvenDeals
 			and tradeSnapshot.moneyGiven <= vendorReturn or tradeSnapshot.moneyGiven < vendorReturn) then
 			self:RecordPurchase(incomingItemID, incomingQuantity, tradeSnapshot.moneyGiven)
 		end

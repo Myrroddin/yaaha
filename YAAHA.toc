@@ -31,7 +31,7 @@
 ## Category-zhTW: 拍賣
 
 ## SavedVariables: YAAHADB
-## OptionalDeps: Ace3, LibAboutPanel-2.0
+## OptionalDeps: Ace3, LibAboutPanel-2.0, LibDataBroker-1.1, LibDBIcon-1.0
 
 ## X-Date: @project-date-iso@
 ## X-Localizations: enUS, deDE, esES, esMX, frFR, itIT, ptBR, koKR, ruRU, zhCN, zhTW
@@ -56,6 +56,8 @@ Libs\AceGUI-3.0\AceGUI-3.0.xml
 Libs\AceConfig-3.0\AceConfig-3.0.xml
 Libs\AceComm-3.0\AceComm-3.0.xml
 Libs\AceSerializer-3.0\AceSerializer-3.0.xml
+Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
+Libs\LibDBIcon-1.0\lib.xml
 Libs\LibAboutPanel-2.0\lib.xml
 
 Locales\enUS.lua
@@ -72,6 +74,7 @@ Locales\zhTW.lua
 
 Core.lua
 Options.lua
+Data\ConvertData.lua
 Data\DisenchantingData.lua
 Data\DisenchantingCollector.lua
 Modules\DataProcessing.lua
@@ -83,6 +86,7 @@ Modules\VendorFlipTracking.lua
 Modules\SaleCollector.lua
 Modules\Tooltip.lua
 Modules\VendorDeals.lua
+Modules\DisenchantingDeals.lua
 Modules\Sync.lua
 Modules\Storage.lua
 API.lua

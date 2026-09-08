@@ -186,10 +186,13 @@ local function FinishScan(auctionDB, numListings)
 	local started = dataProcessing:ProcessScan(scope, auctionDB, {
 		totalItems = numItems,
 		totalListings = numListings,
-	}, function()
+	}, function(success)
 		scanning = false
 		scanScope = nil
 		UpdateScanButton()
+		if success then
+			module:SendMessage("YAAHA_SCAN_PROCESSED", scope)
+		end
 		-- Notify dependent UI immediately. Waiting for its periodic state check leaves
 		-- a brief interval where the cache is ready but the Deals button ignores a click.
 		module:SendMessage("YAAHA_VENDOR_CACHE_READY", scope)
@@ -372,7 +375,7 @@ local function CreateScanButton()
 	if not scanButton then
 		scanButton = CreateFrame("Button", "YAAHAScanButton", parent, "UIPanelButtonTemplate")
 		scanButton:SetSize(120, 22)
-		scanButton:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -230, -10)
+		scanButton:SetPoint("TOPLEFT", parent, "TOPLEFT", 14, -10)
 		scanButton:SetText(L["Scan"])
 		scanButton:SetScript("OnClick", StartScan)
 		scanButton:SetScript("OnUpdate", function(self, elapsed)

@@ -42,6 +42,7 @@ local tooltip = addon:GetModule("Tooltip")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
 local POPUP_NAME = "YAAHA_VENDOR_FLIP"
+local QUERY_RETRY_LIMIT = 3
 local QUERY_TIMEOUT = 10
 local RESULTS_PER_PAGE = 50
 local TRANSACTION_TIMEOUT = 10
@@ -49,12 +50,13 @@ local GREEN_NUMBER = "|cff20ff20"
 local RED_NUMBER = "|cffff2020"
 
 local actionButton, restartButton, statusText
-local ContinueAfterCandidate
+local AdvanceRequest, ContinueAfterCandidate
 local currentCandidate, currentPage, currentRequest, nextResultIndex
 local pendingPurchase
 local queue, queueIndex
 local running, searchPending, transactionPending, waitingForItemInfo, waitingForResults
-local resumePage
+local advanceAfterPurchaseRefresh, resumePage, transactionListUpdated, waitingForPurchaseRefresh
+local queryAttempts = 0
 local searchDeadline, transactionDeadline
 local statusElapsed = 0
 local highBidderNotices
@@ -69,7 +71,7 @@ local function IsProfitable(price, vendorReturn)
 		return false
 	end
 
-	if addon.db.profile.includeBreakEvenVendorFlips then
+	if addon.db.profile.includeBreakEvenDeals then
 		return price <= vendorReturn
 	end
 	return price < vendorReturn
@@ -123,6 +125,8 @@ end
 
 local function IsPlayerAuction(owner, ownerFullName)
 	return owner == playerName or owner == playerFullName or ownerFullName == playerFullName
+		or owner and addon.db.global.alts[owner]
+		or ownerFullName and addon.db.global.alts[ownerFullName]
 end
 
 local function ReadListing(index)
@@ -193,6 +197,10 @@ local function FinishSearch(message)
 	waitingForItemInfo = false
 	waitingForResults = false
 	resumePage = false
+	advanceAfterPurchaseRefresh = false
+	transactionListUpdated = false
+	waitingForPurchaseRefresh = false
+	queryAttempts = 0
 	searchDeadline = nil
 	transactionDeadline = nil
 	currentCandidate = nil
@@ -211,16 +219,39 @@ end
 
 local function ResolveTransaction(succeeded, confirmedFailure)
 	transactionPending = false
-	transactionDeadline = nil
 	if not running or not currentRequest then
+		transactionDeadline = nil
 		return
 	end
 
 	if succeeded then
 		pendingPurchase = nil
 		SetStatus(L["Auction action accepted; refreshing results."])
-		ContinueAfterCandidate(true)
+		-- Blizzard removes a purchased auction from the loaded page and shifts the
+		-- following row into the same index. Resume there after the list-update event
+		-- instead of issuing a fresh query and risking another throttle or timeout.
+		nextResultIndex = currentCandidate.index
+		currentCandidate = nil
+		currentRequest.remaining = currentRequest.remaining - 1
+		advanceAfterPurchaseRefresh = currentRequest.remaining <= 0
+		if transactionListUpdated then
+			transactionDeadline = nil
+			transactionListUpdated = false
+			if advanceAfterPurchaseRefresh then
+				advanceAfterPurchaseRefresh = false
+				AdvanceRequest()
+			else
+				resumePage = true
+			end
+		else
+			waitingForPurchaseRefresh = true
+			transactionDeadline = GetTime() + TRANSACTION_TIMEOUT
+		end
 	else
+		transactionDeadline = nil
+		advanceAfterPurchaseRefresh = false
+		transactionListUpdated = false
+		waitingForPurchaseRefresh = false
 		if confirmedFailure and pendingPurchase then
 			saleCollector:DiscardPendingPurchase(pendingPurchase)
 		end
@@ -244,7 +275,7 @@ local function IsAuctionActionError(errorType)
 		or errorType == LE_GAME_ERR_NOT_ENOUGH_MONEY
 end
 
-local function AdvanceRequest()
+function AdvanceRequest()
 	currentCandidate = nil
 	currentRequest = nil
 	queueIndex = queueIndex + 1
@@ -257,6 +288,7 @@ local function AdvanceRequest()
 				currentRequest = request
 				currentPage = 0
 				nextResultIndex = 1
+				queryAttempts = 0
 				ScheduleSearch()
 				return
 			end
@@ -338,9 +370,11 @@ function module:ActOnCandidate(action, candidate)
 	-- Do not search again until Blizzard confirms success or reports failure; querying
 	-- while the purchase is still pending can produce avoidable internal auction errors.
 	transactionPending = true
+	transactionListUpdated = false
+	waitingForPurchaseRefresh = false
 	transactionDeadline = GetTime() + TRANSACTION_TIMEOUT
 	SetStatus(L["Waiting for the auction house..."])
-	pendingPurchase = saleCollector:RecordPendingPurchase("list", listing.index, price, action)
+	pendingPurchase = saleCollector:RecordPendingPurchase("list", listing.index, price, action, "vendor")
 	PlaceAuctionBid("list", listing.index, price)
 end
 
@@ -537,12 +571,16 @@ local function StartVendorFlips()
 	local vendorList = scope and addon.db[scope].vendorList
 	queue = BuildQueue(vendorList, scope)
 	if #queue == 0 then
-		SetStatus(not vendorList or not next(vendorList)
-			and L["No cached vendor deals are available. Scan this auction house first."]
-			or L["No profitable vendor deals remain."])
+		local scanStats = scope and addon.db[scope].auctionStats
+		if not scanStats or not scanStats.lastScan then
+			SetStatus(L["No cached vendor deals are available. Scan this auction house first."])
+		else
+			SetStatus(L["No profitable vendor deals remain."])
+		end
 		return
 	end
 
+	module:SendMessage("YAAHA_DEAL_SEARCH_STARTED", "vendor")
 	-- A new run always begins from a clean cursor. Most of these fields are also
 	-- cleared when a run finishes, but resetting them here makes Start independent
 	-- from how the preceding run ended (completion, timeout, stop, or AH closure).
@@ -554,10 +592,14 @@ local function StartVendorFlips()
 	currentRequest = nil
 	nextResultIndex = 1
 	resumePage = false
+	advanceAfterPurchaseRefresh = false
+	transactionListUpdated = false
 	searchPending = false
 	transactionPending = false
 	waitingForItemInfo = false
+	waitingForPurchaseRefresh = false
 	waitingForResults = false
+	queryAttempts = 0
 	searchDeadline = nil
 	transactionDeadline = nil
 	actionButton:SetText(L["Stop Vendor Flips"])
@@ -580,19 +622,20 @@ local function CreateInterface()
 
 	actionButton = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
 	actionButton:SetSize(150, 24)
-	actionButton:SetPoint("TOPRIGHT", page, "TOP", -4, -125)
+	actionButton:SetPoint("TOPLEFT", page, "TOPLEFT", 0, -14)
 	actionButton:SetText(L["Start Vendor Flips"])
 	actionButton:SetScript("OnClick", StartVendorFlips)
 
 	restartButton = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
 	restartButton:SetSize(150, 24)
-	restartButton:SetPoint("TOPLEFT", page, "TOP", 4, -125)
+	restartButton:SetPoint("LEFT", actionButton, "RIGHT", 8, 0)
 	restartButton:SetText(L["Restart Vendor Flips"])
 	restartButton:SetScript("OnClick", RestartVendorFlips)
 
 	statusText = page:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	statusText:SetPoint("TOP", page, "TOP", 0, -159)
-	statusText:SetWidth(500)
+	statusText:SetPoint("TOPLEFT", actionButton, "BOTTOMLEFT", 0, -10)
+	statusText:SetPoint("TOPRIGHT", page, "TOPRIGHT", 0, -48)
+	statusText:SetJustifyH("LEFT")
 	statusText:SetText("")
 end
 
@@ -630,6 +673,7 @@ function module:OnEnable()
 	self:RegisterEvent("GET_ITEM_INFO_RECEIVED")
 	self:RegisterEvent("UI_ERROR_MESSAGE")
 	self:RegisterMessage("YAAHA_VENDOR_CACHE_READY")
+	self:RegisterMessage("YAAHA_DEAL_SEARCH_STARTED")
 	updateFrame:SetScript("OnUpdate", function(_, elapsed)
 		statusElapsed = statusElapsed + elapsed
 		if statusElapsed >= 0.2 then
@@ -643,7 +687,7 @@ function module:OnEnable()
 				restartButton:Disable()
 				if dataProcessing:IsProcessing() then
 					local processed, total = dataProcessing:GetProgress()
-					SetStatus(format(L["Building vendor cache: %d/%d items."], processed, total))
+					SetStatus(format(L["Building deal caches: %d/%d steps."], processed, total))
 				else
 					SetStatus(L["Waiting for auction scan results..."])
 				end
@@ -657,6 +701,19 @@ function module:OnEnable()
 
 		if running and transactionPending and GetTime() >= transactionDeadline then
 			ResolveTransaction(false, false)
+		elseif running and waitingForPurchaseRefresh and GetTime() >= transactionDeadline then
+			-- If Classic never publishes the post-purchase refresh, recover with a
+			-- focused query rather than leaving the workflow stalled.
+			waitingForPurchaseRefresh = false
+			transactionDeadline = nil
+			if advanceAfterPurchaseRefresh then
+				advanceAfterPurchaseRefresh = false
+				AdvanceRequest()
+			else
+				currentPage = 0
+				nextResultIndex = 1
+				ScheduleSearch()
+			end
 		elseif running and resumePage then
 			resumePage = false
 			self:ProcessCurrentPage()
@@ -666,11 +723,13 @@ function module:OnEnable()
 			if canQuery then
 				searchPending = false
 				waitingForResults = true
+				queryAttempts = queryAttempts + 1
 				searchDeadline = GetTime() + QUERY_TIMEOUT
 				QueryAuctionItems(currentRequest.name, nil, nil, currentPage, false, nil, false, true, nil)
 			elseif GetTime() >= searchDeadline then
-				SetStatus(L["Vendor search timed out; continuing."])
-				AdvanceRequest()
+				-- A throttle is not proof that the candidate is gone. Keep waiting for
+				-- permission rather than silently skipping it.
+				ScheduleSearch()
 			end
 		elseif running and waitingForItemInfo and GetTime() >= searchDeadline then
 			-- Reissuing the exact search is safer than discarding the whole cached
@@ -678,11 +737,21 @@ function module:OnEnable()
 			waitingForItemInfo = false
 			ScheduleSearch()
 		elseif running and waitingForResults and GetTime() >= searchDeadline then
-			SetStatus(L["Vendor search timed out; continuing."])
 			waitingForResults = false
-			AdvanceRequest()
+			if queryAttempts < QUERY_RETRY_LIMIT then
+				ScheduleSearch()
+			else
+				SetStatus(L["Vendor search timed out; continuing."])
+				AdvanceRequest()
+			end
 		end
 	end)
+end
+
+function module:YAAHA_DEAL_SEARCH_STARTED(_, dealType)
+	if running and dealType ~= "vendor" then
+		StopVendorFlips()
+	end
 end
 
 function module:YAAHA_VENDOR_CACHE_READY(_, scope)
@@ -716,10 +785,27 @@ function module:AUCTION_HOUSE_CLOSED()
 end
 
 function module:AUCTION_ITEM_LIST_UPDATE()
+	if running and transactionPending then
+		-- The list refresh can arrive before the chat confirmation. Remember it so
+		-- ResolveTransaction can continue immediately once success is confirmed.
+		transactionListUpdated = true
+		return
+	elseif running and waitingForPurchaseRefresh then
+		waitingForPurchaseRefresh = false
+		transactionDeadline = nil
+		if advanceAfterPurchaseRefresh then
+			advanceAfterPurchaseRefresh = false
+			AdvanceRequest()
+		else
+			self:ProcessCurrentPage()
+		end
+		return
+	end
 	if running and (waitingForResults or waitingForItemInfo) then
 		local receivedNewPage = waitingForResults
 		waitingForResults = false
 		waitingForItemInfo = false
+		queryAttempts = 0
 		if receivedNewPage then
 			nextResultIndex = 1
 		end

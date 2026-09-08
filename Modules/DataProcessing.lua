@@ -6,6 +6,7 @@ local coroutineStatus = coroutine.status
 local coroutineYield = coroutine.yield
 local CreateFrame = CreateFrame
 local floor = math.floor
+local format = string.format
 local geterrorhandler = geterrorhandler
 local GetItemInfo = C_Item.GetItemInfo
 local GetServerTime = GetServerTime
@@ -24,6 +25,8 @@ local UnitFactionGroup = UnitFactionGroup
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("DataProcessing")
+local disenchantingData = addon:GetModule("DisenchantingData")
+local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 local playerFaction = UnitFactionGroup("player")
 
 local SECONDS_PER_DAY = 24 * 60 * 60
@@ -398,7 +401,46 @@ local function BuildVendorItem(itemID, scanData)
 	return #result.auctions > 0 and result or nil
 end
 
-local function FinishProcessing(success, result, vendorList, scope, scanStats, callback)
+local function BuildDisenchantItem(itemID, scanData, priceDB)
+	if not scanData or not scanData.auctions then
+		return
+	end
+
+	local disenchant = disenchantingData:GetValue(itemID, nil, priceDB)
+	if not disenchant or not disenchant.expectedValue or disenchant.expectedValue <= 0 then
+		return
+	end
+
+	local result = {
+		expectedValue = disenchant.expectedValue,
+		auctions = {},
+	}
+	-- Equipment cannot stack, but identical copies at the same buyout are combined.
+	-- The live deal search still resolves and purchases each physical listing alone.
+	for count, byCount in pairs(scanData.auctions) do
+		for _, byBid in pairs(byCount) do
+			for unitBuyout, numAuctions in pairs(byBid) do
+				if unitBuyout > 0 and unitBuyout <= disenchant.expectedValue then
+					local key = format("%d:%d", count, unitBuyout)
+					local auction = result.auctions[key]
+					if auction then
+						auction.numAuctions = auction.numAuctions + numAuctions
+					else
+						result.auctions[key] = {
+							count = count,
+							buyout = unitBuyout * count,
+							numAuctions = numAuctions,
+						}
+					end
+				end
+			end
+		end
+	end
+
+	return next(result.auctions) and result or nil
+end
+
+local function FinishProcessing(success, result, vendorList, disenchantList, scope, scanStats, callback)
 	processingFrame:Hide()
 	worker = nil
 	completed = nil
@@ -408,6 +450,7 @@ local function FinishProcessing(success, result, vendorList, scope, scanStats, c
 		-- have been processed, so tooltips can never observe a half-updated scan.
 		addon.db[scope].auctionDB = result
 		addon.db[scope].auctionStats = scanStats
+		addon.db[scope].disenchantList = disenchantList
 		addon.db[scope].vendorList = vendorList
 		addon:FireAPIEvent("AUCTION_HOUSE_DATA_UPDATED",
 			scope == "realm" and "Neutral" or playerFaction, "scan")
@@ -419,12 +462,12 @@ local function FinishProcessing(success, result, vendorList, scope, scanStats, c
 end
 
 processingFrame:SetScript("OnUpdate", function()
-	local success, result, vendorList, scope, scanStats, callback = coroutineResume(worker)
+	local success, result, vendorList, disenchantList, scope, scanStats, callback = coroutineResume(worker)
 	if not success then
-		geterrorhandler()("YAAHA auction data processing failed: " .. tostring(result))
-		FinishProcessing(false, nil, nil, completed.scope, nil, completed.callback)
+		geterrorhandler()(format(L["YAAHA auction data processing failed: %s"], tostring(result)))
+		FinishProcessing(false, nil, nil, nil, completed.scope, nil, completed.callback)
 	elseif coroutineStatus(worker) == "dead" then
-		FinishProcessing(true, result, vendorList, scope, scanStats, callback)
+		FinishProcessing(true, result, vendorList, disenchantList, scope, scanStats, callback)
 	end
 end)
 
@@ -454,18 +497,23 @@ function module:ProcessScan(scope, scanDB, scanStats, callback)
 		end
 	end
 
-	totalItems = #itemIDs
+	local scanItemIDs = {}
+	for itemID in pairs(scanDB) do
+		scanItemIDs[#scanItemIDs + 1] = itemID
+	end
+	totalItems = #itemIDs + #scanItemIDs
 	processedItems = 0
 	completed = { scope = scope, callback = callback }
 	worker = coroutineCreate(function()
 		local result = {}
 		local vendorList = {}
+		local disenchantList = {}
 		local scanTime = GetServerTime()
 		scanStats.lastScan = scanTime
 
 		LoadVendorItemData(scanDB)
 
-		for index = 1, totalItems do
+		for index = 1, #itemIDs do
 			local itemID = itemIDs[index]
 			local currentScanData = scanDB[itemID]
 			local itemData = ProcessItem(oldDB[itemID], currentScanData, scanTime)
@@ -483,15 +531,30 @@ function module:ProcessScan(scope, scanDB, scanStats, callback)
 			end
 		end
 
-		return result, vendorList, scope, scanStats, callback
+		-- Disenchant values must use the complete newly processed price database;
+		-- calculating them during the first loop could miss a material processed later.
+		for index = 1, #scanItemIDs do
+			local itemID = scanItemIDs[index]
+			local disenchantItem = BuildDisenchantItem(itemID, scanDB[itemID], result)
+			if disenchantItem then
+				disenchantList[itemID] = disenchantItem
+			end
+			processedItems = #itemIDs + index
+			if index % ITEMS_PER_FRAME == 0 then
+				coroutineYield()
+			end
+		end
+
+		return result, vendorList, disenchantList, scope, scanStats, callback
 	end)
 
 	processingFrame:Show()
 	return true
 end
 
-function module:MergeSyncedMarketItem(scope, itemID, incoming)
-	local stored = addon.db[scope].auctionDB[itemID] or {}
+function module:MergeSyncedMarketItem(scope, itemID, incoming, scopeDB)
+	scopeDB = scopeDB or addon.db[scope]
+	local stored = scopeDB.auctionDB[itemID] or {}
 	-- Rebuild from the fields still used by the current data model so obsolete
 	-- development fields cannot survive merely because this item was synchronized.
 	local current = {
@@ -604,6 +667,6 @@ function module:MergeSyncedMarketItem(scope, itemID, incoming)
 		end
 	end
 	current.trends = next(trends) and trends or nil
-	addon.db[scope].auctionDB[itemID] = next(history) and current or current.lastScan and current or nil
+	scopeDB.auctionDB[itemID] = next(history) and current or current.lastScan and current or nil
 	return changed
 end

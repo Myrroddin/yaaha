@@ -15,6 +15,7 @@ YAAHA exposes a small public API for other World of Warcraft addons through the 
   - [`GetItemData(itemID, auctionHouseType)`](#getitemdataitemid-auctionhousetype)
   - [Market-value wrappers](#market-value-wrappers)
   - [`GetAuctionHouseStats(auctionHouseType)`](#getauctionhousestatsauctionhousetype)
+  - [`GetVendorFlipProfit()`](#getvendorflipprofit)
   - [Realm-data functions](#realm-data-functions)
   - [Disenchanting functions](#disenchanting-functions)
 - [Callbacks](#callbacks)
@@ -169,6 +170,20 @@ The returned `YAAHA_API.AuctionHouseStats` table is a defensive snapshot with th
 
 The optional `auctionHouseType` follows the same rules as `GetItemData()`. The function returns `nil` when the request is invalid or no completed snapshot is available.
 
+### `GetVendorFlipProfit()`
+
+Returns the running vendor-flip profit for the current realm in copper.
+
+```lua
+local profit = YAAHA_API.GetVendorFlipProfit()
+```
+
+The value includes only purchases attributed to YAAHA's vendor-deal feature and
+their recognized proceeds. It can be negative, positive, or zero, and begins
+again at zero when the user resets the tracker. Unlike other monetary API
+values, zero is meaningful and is therefore returned rather than converted to
+`nil`.
+
 ### Realm-data functions
 
 Realm statistics are intentionally exposed one value at a time. They are not included in the table returned by `GetItemData()`, and YAAHA's private `personalSaleRate` is never returned by the public API.
@@ -278,7 +293,7 @@ They are not object methods and should not be called with a colon.
 
 ### Auction-house types
 
-Omitting `auctionHouseType`, or passing `nil`, accesses the current character's faction auction-house database. Passing `"Neutral"` explicitly accesses the neutral auction-house database. An explicit faction value accesses faction data only when it matches the current character; requesting the opposite faction returns `nil`. YAAHA never substitutes or combines another auction-house type.
+Omitting `auctionHouseType`, or passing `nil`, accesses the current character's faction auction-house database. Explicit `"Alliance"`, `"Horde"`, and `"Neutral"` values access only their corresponding databases. Opposite-faction data is available when YAAHA has received or recorded it. YAAHA never substitutes or combines another auction-house type.
 
 ### Unavailable data
 
