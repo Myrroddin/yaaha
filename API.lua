@@ -1,3 +1,4 @@
+local ceil = math.ceil
 local floor = math.floor
 local LibStub = LibStub
 local next = next
@@ -8,6 +9,7 @@ local playerFaction = UnitFactionGroup("player")
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local saleCollector = addon:GetModule("SaleCollector")
 local disenchantingData = addon:GetModule("DisenchantingData")
+local professionScanner = addon:GetModule("ProfessionScanner")
 local storage = addon:GetModule("Storage")
 
 -- API versions are independent of addon releases. Increment this only when a
@@ -61,6 +63,34 @@ local API_VERSION = 1
 ---@field sampleCount integer Number of learned Wrath observations used.
 ---@field results YAAHA_API.PricedDisenchantMaterial[] Priced material results.
 
+---@alias YAAHA_API.MaterialValueSource "market"|"vendor"|"convert"|"crafting"
+
+---@class YAAHA_API.CraftingConversion
+---@field itemID integer Converted source-material item ID.
+---@field quantity number Source quantity required for one unit of the requested material.
+---@field priceSource YAAHA_API.MarketValueSource Market source used to price the converted material.
+
+---@class YAAHA_API.CraftingMaterial
+---@field itemID integer Reagent item ID.
+---@field quantity number Required quantity per recipe cast.
+---@field unitValue integer Selected per-unit value in copper.
+---@field totalValue integer Selected value of the required quantity in copper.
+---@field source YAAHA_API.MaterialValueSource Source which supplied the reagent's lowest value.
+---@field conversion? YAAHA_API.CraftingConversion Conversion details when `source` is `"convert"`.
+---@field crafting? YAAHA_API.CraftingResult Nested recipe details when `source` is `"crafting"`.
+
+---@class YAAHA_API.CraftingResult
+---@field value integer Per-unit crafting value in copper.
+---@field totalReagentValue integer Reagent value for one recipe cast in copper.
+---@field outputQuantity number Average number of items produced per cast.
+---@field character string Character whose known recipe was used.
+---@field profession string Localized profession name.
+---@field stale boolean Whether the character's profession snapshot predates the current game-client build.
+---@field spellID integer Recipe spell ID.
+---@field outputItemID? integer Crafted item ID; absent for direct enchants.
+---@field name string Localized recipe name.
+---@field materials YAAHA_API.CraftingMaterial[] Reagent breakdown.
+
 ---@alias YAAHA_API.DataUpdatedCallback fun(event: YAAHA_API.DataUpdateEvent, auctionHouseType: YAAHA_API.AuctionHouseType, source: YAAHA_API.DataUpdateSource)
 
 -- YAAHA's public API is a normal global table rather than a LibStub library.
@@ -89,6 +119,8 @@ local API_VERSION = 1
 ---@field IsDisenchantable fun(itemID: integer): boolean
 ---@field GetDisenchantResults fun(itemID: integer): YAAHA_API.DisenchantResults?
 ---@field GetDisenchantValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType, fullResults?: boolean): integer|YAAHA_API.PricedDisenchantResults|nil
+---@field GetCraftingValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType, fullResults?: boolean, currentCharacterOnly?: boolean): integer|YAAHA_API.CraftingResult|nil
+---@field GetRecipeCraftingValue fun(spellID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType, fullResults?: boolean, currentCharacterOnly?: boolean): integer|YAAHA_API.CraftingResult|nil
 ---@field RegisterCallback fun(receiver: any, event: YAAHA_API.DataUpdateEvent, method?: string|YAAHA_API.DataUpdatedCallback, arg?: any)
 ---@field UnregisterCallback fun(receiver: any, event: YAAHA_API.DataUpdateEvent)
 ---@field UnregisterAllCallbacks fun(receiver: any)
@@ -447,4 +479,90 @@ function API.GetDisenchantValue(itemID, auctionHouseType, fullResults)
 		}
 	end
 	return result
+end
+
+---@param value number
+---@return integer copper
+local function NormalizeRequiredCopper(value)
+	return ceil(value)
+end
+
+local CopyCraftingResult
+---@return YAAHA_API.CraftingResult? result
+function CopyCraftingResult(source)
+	if not source then
+		return
+	end
+	---@type YAAHA_API.CraftingResult
+	local result = {
+		value = NormalizeRequiredCopper(source.value),
+		totalReagentValue = NormalizeRequiredCopper(source.totalReagentValue),
+		outputQuantity = source.outputQuantity,
+		character = source.character,
+		profession = source.profession,
+		stale = source.stale,
+		spellID = source.spellID,
+		outputItemID = source.outputItemID,
+		name = source.name,
+		materials = {},
+	}
+	for index = 1, #source.materials do
+		local material = source.materials[index]
+		local copy = {
+			itemID = material.itemID,
+			quantity = material.quantity,
+			unitValue = NormalizeRequiredCopper(material.unitValue),
+			totalValue = NormalizeRequiredCopper(material.totalValue),
+			source = material.source,
+		}
+		if material.source == "convert" and material.detail then
+			copy.conversion = {
+				itemID = material.detail.itemID,
+				quantity = material.detail.quantity,
+				priceSource = material.detail.priceSource,
+			}
+		elseif material.source == "crafting" then
+			copy.crafting = CopyCraftingResult(material.detail)
+		end
+		result.materials[index] = copy
+	end
+	return result
+end
+
+local function ValidateCraftingArguments(id, fullResults, currentCharacterOnly)
+	return type(id) == "number" and id > 0 and id == floor(id)
+		and (fullResults == nil or type(fullResults) == "boolean")
+		and (currentCharacterOnly == nil or type(currentCharacterOnly) == "boolean")
+end
+
+---@param itemID integer
+---@param auctionHouseType? YAAHA_API.AuctionHouseType
+---@param fullResults? boolean
+---@param currentCharacterOnly? boolean
+---@overload fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType, fullResults?: false, currentCharacterOnly?: boolean): integer?
+---@overload fun(itemID: integer, auctionHouseType: YAAHA_API.AuctionHouseType|nil, fullResults: true, currentCharacterOnly?: boolean): YAAHA_API.CraftingResult?
+---@return integer|YAAHA_API.CraftingResult|nil value
+function API.GetCraftingValue(itemID, auctionHouseType, fullResults, currentCharacterOnly)
+	if not ValidateCraftingArguments(itemID, fullResults, currentCharacterOnly) then
+		return
+	end
+	local auctionDB = GetAuctionDB(auctionHouseType)
+	local result = auctionDB and professionScanner:GetItemCrafting(itemID, auctionDB, currentCharacterOnly)
+	return fullResults and CopyCraftingResult(result) or result and NormalizeRequiredCopper(result.value)
+end
+
+---@param spellID integer
+---@param auctionHouseType? YAAHA_API.AuctionHouseType
+---@param fullResults? boolean
+---@param currentCharacterOnly? boolean
+---@overload fun(spellID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType, fullResults?: false, currentCharacterOnly?: boolean): integer?
+---@overload fun(spellID: integer, auctionHouseType: YAAHA_API.AuctionHouseType|nil, fullResults: true, currentCharacterOnly?: boolean): YAAHA_API.CraftingResult?
+---@return integer|YAAHA_API.CraftingResult|nil value
+function API.GetRecipeCraftingValue(spellID, auctionHouseType, fullResults, currentCharacterOnly)
+	if not ValidateCraftingArguments(spellID, fullResults, currentCharacterOnly) then
+		return
+	end
+	local auctionDB = GetAuctionDB(auctionHouseType)
+	local result = auctionDB and professionScanner:GetRecipeCrafting(spellID, auctionDB, currentCharacterOnly)
+	return fullResults and CopyCraftingResult(result) or result and NormalizeRequiredCopper(result.value)
 end

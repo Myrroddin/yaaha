@@ -16,13 +16,6 @@ local GetNumAuctionItems = GetNumAuctionItems
 local GetTime = GetTime
 local ipairs = ipairs
 local LibStub = LibStub
-local LE_GAME_ERR_AUCTION_BID_OWN = LE_GAME_ERR_AUCTION_BID_OWN
-local LE_GAME_ERR_AUCTION_DATABASE_ERROR = LE_GAME_ERR_AUCTION_DATABASE_ERROR
-local LE_GAME_ERR_AUCTION_HIGHER_BID = LE_GAME_ERR_AUCTION_HIGHER_BID
-local LE_GAME_ERR_ITEM_MAX_COUNT = LE_GAME_ERR_ITEM_MAX_COUNT
-local LE_GAME_ERR_ITEM_NOT_FOUND = LE_GAME_ERR_ITEM_NOT_FOUND
-local LE_GAME_ERR_NOT_ENOUGH_MONEY = LE_GAME_ERR_NOT_ENOUGH_MONEY
-local next = next
 local pairs = pairs
 local PlaceAuctionBid = PlaceAuctionBid
 local QueryAuctionItems = QueryAuctionItems
@@ -30,7 +23,6 @@ local sort = table.sort
 local StaticPopupDialogs = StaticPopupDialogs
 local StaticPopup_Hide = StaticPopup_Hide
 local StaticPopup_Show = StaticPopup_Show
-local UnitFullName = UnitFullName
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("VendorDeals", "AceEvent-3.0")
@@ -63,19 +55,7 @@ local highBidderNotices
 local wasScannerBusy
 local updateFrame = CreateFrame("Frame")
 
-local playerName, playerRealm = UnitFullName("player")
-local playerFullName = playerRealm and playerRealm ~= "" and playerName .. "-" .. playerRealm or playerName
-
-local function IsProfitable(price, vendorReturn)
-	if not price or price <= 0 then
-		return false
-	end
-
-	if addon.db.profile.includeBreakEvenDeals then
-		return price <= vendorReturn
-	end
-	return price < vendorReturn
-end
+local _, playerRealm = addon:GetPlayerIdentity()
 
 local function SetStatus(text)
 	if statusText then
@@ -94,7 +74,7 @@ local function GetVendorCacheCounts()
 				local vendorReturn = vendorData.vendorSell * auction.count
 				local bid = auction.unitBid and floor(auction.unitBid * auction.count + 0.5)
 				local buyout = auction.unitBuyout and floor(auction.unitBuyout * auction.count + 0.5)
-				if IsProfitable(bid, vendorReturn) or IsProfitable(buyout, vendorReturn) then
+				if addon:IsDealProfitable(bid, vendorReturn) or addon:IsDealProfitable(buyout, vendorReturn) then
 					itemListings = itemListings + (auction.numAuctions or 1)
 				end
 			end
@@ -121,12 +101,6 @@ local function ScheduleSearch()
 	waitingForItemInfo = false
 	waitingForResults = false
 	searchDeadline = GetTime() + QUERY_TIMEOUT
-end
-
-local function IsPlayerAuction(owner, ownerFullName)
-	return owner == playerName or owner == playerFullName or ownerFullName == playerFullName
-		or owner and addon.db.global.alts[owner]
-		or ownerFullName and addon.db.global.alts[ownerFullName]
 end
 
 local function ReadListing(index)
@@ -166,7 +140,7 @@ local function IsOwnHighBidder(listing)
 		-- currently winning rather than exposing the bidder's name.
 		return true
 	end
-	return highBidder and addon.db.global.alts[highBidder] or false
+	return highBidder and addon:IsAlt(highBidder) or false
 end
 
 local function MatchesRequest(listing, request)
@@ -187,7 +161,7 @@ local function MatchesRequest(listing, request)
 			return false
 		end
 	end
-	return not IsPlayerAuction(listing.owner, listing.ownerFullName)
+	return not addon:IsPlayerAuction(listing.owner, listing.ownerFullName)
 end
 
 local function FinishSearch(message)
@@ -266,15 +240,6 @@ local function ResolveTransaction(succeeded, confirmedFailure)
 	end
 end
 
-local function IsAuctionActionError(errorType)
-	return errorType == LE_GAME_ERR_AUCTION_BID_OWN
-		or errorType == LE_GAME_ERR_AUCTION_DATABASE_ERROR
-		or errorType == LE_GAME_ERR_AUCTION_HIGHER_BID
-		or errorType == LE_GAME_ERR_ITEM_MAX_COUNT
-		or errorType == LE_GAME_ERR_ITEM_NOT_FOUND
-		or errorType == LE_GAME_ERR_NOT_ENOUGH_MONEY
-end
-
 function AdvanceRequest()
 	currentCandidate = nil
 	currentRequest = nil
@@ -325,7 +290,7 @@ local function RevalidateCandidate(candidate, action)
 		or listing.minBid ~= candidate.minBid or listing.buyout ~= candidate.buyout
 		or candidate.owner and listing.owner and listing.owner ~= candidate.owner
 		or candidate.ownerFullName and listing.ownerFullName and listing.ownerFullName ~= candidate.ownerFullName
-		or IsPlayerAuction(listing.owner, listing.ownerFullName) then
+		or addon:IsPlayerAuction(listing.owner, listing.ownerFullName) then
 		return
 	end
 
@@ -339,11 +304,11 @@ local function RevalidateCandidate(candidate, action)
 		-- At the buyout price, PlaceAuctionBid buys the listing instead of placing
 		-- a conventional bid, so that action belongs exclusively to Buyout.
 		if (listing.buyout > 0 and listing.payableBid >= listing.buyout)
-			or not IsProfitable(listing.payableBid, vendorReturn) then
+			or not addon:IsDealProfitable(listing.payableBid, vendorReturn) then
 			return
 		end
 		return listing, listing.payableBid
-	elseif listing.buyout > 0 and IsProfitable(listing.buyout, vendorReturn) then
+	elseif listing.buyout > 0 and addon:IsDealProfitable(listing.buyout, vendorReturn) then
 		return listing, listing.buyout
 	end
 end
@@ -403,8 +368,8 @@ local function ShowCandidate(listing)
 
 	local vendorReturn = currentRequest.vendorSell * listing.count
 	local canBid = (listing.buyout <= 0 or listing.payableBid < listing.buyout)
-		and IsProfitable(listing.payableBid, vendorReturn)
-	local canBuy = listing.buyout > 0 and IsProfitable(listing.buyout, vendorReturn)
+		and addon:IsDealProfitable(listing.payableBid, vendorReturn)
+	local canBuy = listing.buyout > 0 and addon:IsDealProfitable(listing.buyout, vendorReturn)
 	if not canBid and not canBuy then
 		return false
 	end
@@ -507,10 +472,11 @@ local function BuildQueue(vendorList, scope)
 			local bid = auction.unitBid and floor(auction.unitBid * auction.count + 0.5) or nil
 			local buyout = auction.unitBuyout and floor(auction.unitBuyout * auction.count + 0.5) or 0
 			local bestProfit
-			if IsProfitable(bid, vendorReturn) then
+			if addon:IsDealProfitable(bid, vendorReturn) then
 				bestProfit = vendorReturn - bid
 			end
-			if IsProfitable(buyout, vendorReturn) and (not bestProfit or vendorReturn - buyout > bestProfit) then
+			if addon:IsDealProfitable(buyout, vendorReturn)
+				and (not bestProfit or vendorReturn - buyout > bestProfit) then
 				bestProfit = vendorReturn - buyout
 			end
 			if bestProfit then
@@ -827,7 +793,7 @@ function module:CHAT_MSG_SYSTEM(_, message)
 end
 
 function module:UI_ERROR_MESSAGE(_, errorType)
-	if transactionPending and IsAuctionActionError(errorType) then
+	if transactionPending and addon:IsAuctionActionError(errorType) then
 		ResolveTransaction(false, true)
 	end
 end

@@ -2,6 +2,7 @@ local AUCTIONS = AUCTIONS
 local AUCTION_HOUSE_BROWSE_HEADER_QUANTITY = AUCTION_HOUSE_BROWSE_HEADER_QUANTITY
 local C_Container = C_Container
 local C_Item = C_Item
+local ceil = math.ceil
 local FACTION_NEUTRAL = FACTION_NEUTRAL
 local floor = math.floor
 local format = string.format
@@ -17,12 +18,10 @@ local ItemRefShoppingTooltip2 = ItemRefShoppingTooltip2
 local LibStub = LibStub
 local match = string.match
 local next = next
-local pairs = pairs
 local SELL_PRICE = SELL_PRICE
 local setmetatable = setmetatable
 local ShoppingTooltip1 = ShoppingTooltip1
 local ShoppingTooltip2 = ShoppingTooltip2
-local tonumber = tonumber
 local tostring = tostring
 local UnitFactionGroup = UnitFactionGroup
 
@@ -30,6 +29,7 @@ local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("Tooltip")
 local disenchantingData = addon:GetModule("DisenchantingData")
 local inventoryAverageBuy = addon:GetModule("InventoryAverageBuy")
+local professionScanner = addon:GetModule("ProfessionScanner")
 local saleCollector = addon:GetModule("SaleCollector")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 local playerFaction, localizedPlayerFaction = UnitFactionGroup("player")
@@ -71,6 +71,14 @@ local tooltips = {
 local tooltipState = setmetatable({}, { __mode = "k" })
 local GREEN_NUMBER = "|cff20ff20"
 local RED_NUMBER = "|cffff2020"
+local CRAFT_SALE_VALUE_FIELDS = {
+	"minBuyout",
+	"midweekMarketValue",
+	"weeklyMarketValue",
+	"biweeklyMarketValue",
+	"monthlyMarketValue",
+	"bimonthlyMarketValue",
+}
 
 local function TrimmedDecimal(value)
 	local text = format("%.3f", value)
@@ -147,8 +155,7 @@ end
 
 local function GetItemID(tooltip)
 	local _, link = tooltip:GetItem()
-	local itemID = link and match(link, "item:(%d+)")
-	return itemID and tonumber(itemID), link
+	return addon:GetItemID(link), link
 end
 
 local function HasAuctionData(scopeDB)
@@ -178,18 +185,77 @@ local function GetContext(scope)
 	return "factionrealm", addon.db.factionrealm, localizedPlayerFaction or playerFaction
 end
 
+local function AddCraftingLines(AddLine, result, showBreakdown, multiplier)
+	if not result or not showBreakdown then
+		return
+	end
+	local scale = multiplier / result.outputQuantity
+	for index = 1, #result.materials do
+		local material = result.materials[index]
+		local name, link = C_Item.GetItemInfo(material.itemID)
+		local label = format(L["%s x%s"], link or name or tostring(material.itemID),
+			FormatExpectedQuantity(material.quantity * scale))
+		AddLine(L["Crafting"], label, addon:FormatMoney(ceil(material.totalValue * scale)))
+		if material.source == "convert" and material.detail then
+			local convertedName, convertedLink = C_Item.GetItemInfo(material.detail.itemID)
+			local sourceQuantity = material.detail.quantity < 1 and 1 or material.detail.quantity
+			local resultQuantity = material.detail.quantity < 1 and 1 / material.detail.quantity or 1
+			AddLine(L["Crafting"], format(L["Cheaper conversion: %s x%s -> %s x%s"],
+				convertedLink or convertedName or tostring(material.detail.itemID),
+				FormatExpectedQuantity(sourceQuantity), link or name or tostring(material.itemID),
+				FormatExpectedQuantity(resultQuantity)), "")
+		end
+	end
+end
+
+local function GetCraftSaleValue(data)
+	if not data then
+		return
+	end
+	for index = 1, #CRAFT_SALE_VALUE_FIELDS do
+		local value = data[CRAFT_SALE_VALUE_FIELDS[index]]
+		if value and value > 0 then
+			return value
+		end
+	end
+end
+
+local function FormatCraftingValue(result, multiplier, auctionData, auctionCut, allowMastery)
+	if not result then
+		return "--"
+	end
+	local craftingValue = ceil(result.value * multiplier)
+	local value = addon:FormatMoney(craftingValue)
+	local saleValue = GetCraftSaleValue(auctionData)
+	if saleValue then
+		local expectedReturn = saleValue * auctionCut * multiplier
+		-- Mastery belongs to a crafter in the player's factionrealm. Modifier views
+		-- compare other auction houses, where that character cannot necessarily sell;
+		-- those views therefore use the recipe's baseline output.
+		if allowMastery then
+			expectedReturn = expectedReturn * result.masteryYield
+		end
+		local profit = expectedReturn - craftingValue
+		local color = profit > 0 and GREEN_NUMBER or profit < 0 and RED_NUMBER
+		value = format(L["%s (%s)"], value, addon:FormatMoney(profit, true, color))
+	end
+	return result.stale and format(L["%s (stale)"], value) or value
+end
+
 function module:AddItemData(tooltip, itemID, scope)
 	local activeScope, scopeDB, scopeName = GetContext(scope)
 	local data = scopeDB.auctionDB[itemID]
 	local priceScope = activeScope == "realm" and "realm" or "factionrealm"
 	local disenchant = disenchantingData:GetValue(itemID, priceScope, scopeDB.auctionDB)
 	local inventoryBuy = inventoryAverageBuy:GetValue(itemID)
+	local factionCrafting = professionScanner:GetItemCrafting(itemID, scopeDB.auctionDB, false)
+	local knownCraft = professionScanner:IsItemKnown(itemID, false)
 	local personalSaleRate = saleCollector:GetPersonalSaleData(itemID, priceScope, scopeDB)
 	local realmSaleRate, realmSoldPerDay, realmAverageSaleValue = saleCollector:GetRealmSaleData(
 		itemID, priceScope, scopeDB)
 	local _, _, _, _, _, _, _, _, _, _, vendorSell = C_Item.GetItemInfo(itemID)
 	local vendorBuy = addon.db.global.vendorBuyPrices[itemID]
-	if not data and not disenchant and not inventoryBuy and personalSaleRate == nil
+	if not data and not disenchant and not inventoryBuy and not knownCraft and personalSaleRate == nil
 		and realmSaleRate == nil and realmSoldPerDay == nil and not vendorSell and not vendorBuy then
 		return
 	end
@@ -197,6 +263,8 @@ function module:AddItemData(tooltip, itemID, scope)
 
 	local settings = addon.db.profile.tooltip
 	local multiplier = GetCursorStackCount(itemID)
+	local auctionCut = activeScope == "realm" and 0.85 or 0.95
+	local allowMastery = activeScope == "factionrealm"
 	local activeSection, addedHeader
 	local function EnsureHeader()
 		if not addedHeader then
@@ -265,6 +333,11 @@ function module:AddItemData(tooltip, itemID, scope)
 		AddLine(L["Purchases"], L["Inventory average buy"],
 			addon:FormatMoney(inventoryBuy * multiplier))
 	end
+	if settings["19-craftingValue"] and knownCraft then
+		AddLine(L["Crafting"], L["Crafting cost"],
+			FormatCraftingValue(factionCrafting, multiplier, data, auctionCut, allowMastery))
+	end
+	AddCraftingLines(AddLine, factionCrafting, settings["20-craftingResults"], multiplier)
 
 	if disenchant and settings["11-breakdownResults"] then
 		for index = 1, #disenchant.results do
@@ -285,6 +358,46 @@ function module:AddItemData(tooltip, itemID, scope)
 			disenchant.expectedValue and addon:FormatMoney(disenchant.expectedValue, true) or "--")
 	end
 
+	if addedHeader then
+		tooltip:Show()
+	end
+end
+
+function module:AddRecipeData(tooltip, spellID, scope)
+	local activeScope, scopeDB, scopeName = GetContext(scope)
+	if not professionScanner:IsRecipeKnown(spellID, false) then
+		return
+	end
+	local factionCrafting = professionScanner:GetRecipeCrafting(spellID, scopeDB.auctionDB, false)
+	local settings = addon.db.profile.tooltip
+	if not settings["19-craftingValue"] and not settings["20-craftingResults"] then
+		return
+	end
+
+	local activeSection, addedHeader
+	local function AddLine(section, label, value)
+		if not addedHeader then
+			tooltip:AddLine(" ")
+			tooltip:AddLine("YAAHA", 1, 0.82, 0)
+			tooltip:AddLine(format(L["----- %s -----"], scopeName), 0.75, 0.75, 0.75)
+			addedHeader = true
+		end
+		if activeSection ~= section then
+			tooltip:AddLine(section, 1, 0.82, 0)
+			activeSection = section
+		end
+		tooltip:AddDoubleLine("  " .. label, value, 1, 1, 1, 1, 1, 1)
+	end
+
+	if settings["19-craftingValue"] then
+		local allowMastery = activeScope == "factionrealm"
+		AddLine(L["Crafting"], L["Crafting cost"],
+			FormatCraftingValue(factionCrafting, 1,
+				factionCrafting and factionCrafting.outputItemID
+					and scopeDB.auctionDB[factionCrafting.outputItemID],
+				activeScope == "realm" and 0.85 or 0.95, allowMastery))
+	end
+	AddCraftingLines(AddLine, factionCrafting, settings["20-craftingResults"], 1)
 	if addedHeader then
 		tooltip:Show()
 	end
@@ -314,14 +427,28 @@ local function OnTooltipSetItem(tooltip)
 	module:AddItemData(tooltip, itemID)
 end
 
+local function OnTooltipSetSpell(tooltip)
+	local _, spellID = tooltip:GetSpell()
+	local state = tooltipState[tooltip]
+	if not spellID or state and state.spellID == spellID then
+		return
+	end
+	tooltipState[tooltip] = { spellID = spellID }
+	module:AddRecipeData(tooltip, spellID)
+end
+
 local function OnTooltipCleared(tooltip)
 	tooltipState[tooltip] = nil
 end
 
 function module:OnEnable()
-	for _, tooltip in pairs(tooltips) do
+	for index = 1, #tooltips do
+		local tooltip = tooltips[index]
 		if tooltip then
 			tooltip:HookScript("OnTooltipSetItem", OnTooltipSetItem)
+			if tooltip:HasScript("OnTooltipSetSpell") then
+				tooltip:HookScript("OnTooltipSetSpell", OnTooltipSetSpell)
+			end
 			tooltip:HookScript("OnTooltipCleared", OnTooltipCleared)
 		end
 	end

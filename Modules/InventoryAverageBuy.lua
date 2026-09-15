@@ -14,9 +14,7 @@ local min = math.min
 local NUM_BAG_SLOTS = NUM_BAG_SLOTS
 local NUM_BANKBAGSLOTS = NUM_BANKBAGSLOTS
 local pairs = pairs
-local stringMatch = string.match
 local tableRemove = table.remove
-local tonumber = tonumber
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("InventoryAverageBuy", "AceEvent-3.0")
@@ -24,10 +22,6 @@ local module = addon:NewModule("InventoryAverageBuy", "AceEvent-3.0")
 local bankOpen = false
 local merchantCounts = {}
 local merchantPending = {}
-
-local function GetItemID(link)
-	return link and tonumber(stringMatch(link, "item:(%d+)")) or nil
-end
 
 local function GetRecord(itemID)
 	local records = addon.db.factionrealm.inventoryPurchases
@@ -287,7 +281,7 @@ local function SnapshotMerchantItems()
 	merchantCounts = {}
 	for index = 1, GetMerchantNumItems() do
 		local link = GetMerchantItemLink(index)
-		local itemID = GetItemID(link)
+		local itemID = addon:GetItemID(link)
 		if itemID then
 			merchantCounts[itemID] = C_Item.GetItemCount(itemID, true)
 		end
@@ -296,7 +290,7 @@ end
 
 local function CaptureMerchantPurchase(index)
 	local _, _, price, batchSize, _, _, _, extendedCost = GetMerchantItemInfo(index)
-	local itemID = GetItemID(GetMerchantItemLink(index))
+	local itemID = addon:GetItemID(GetMerchantItemLink(index))
 	if not itemID or extendedCost or not price or price < 1 or not batchSize or batchSize < 1 then
 		return
 	end

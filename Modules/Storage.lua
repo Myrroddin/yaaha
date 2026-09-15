@@ -110,7 +110,8 @@ local function LoadOppositeFactionData()
 		connectedRealms[currentRealm] = true
 	end
 	local realms = C_AutoComplete.GetAutoCompleteRealms()
-	for _, realm in pairs(realms or {}) do
+	for index = 1, realms and #realms or 0 do
+		local realm = realms[index]
 		connectedRealms[realm] = true
 	end
 
@@ -241,7 +242,8 @@ function module:OnEnable()
 end
 
 function module:RestoreAuctionData()
-	for _, scope in pairs(SCOPES) do
+	for index = 1, #SCOPES do
+		local scope = SCOPES[index]
 		RestoreScope(scope)
 	end
 end
@@ -261,7 +263,8 @@ function module:GetOrCreateOppositeFactionData()
 end
 
 function module:PLAYER_LOGOUT()
-	for _, scope in pairs(SCOPES) do
+	for index = 1, #SCOPES do
+		local scope = SCOPES[index]
 		StoreScope(scope)
 	end
 	if oppositeFactionData then

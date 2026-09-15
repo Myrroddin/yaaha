@@ -203,16 +203,10 @@ end
 local function CopyAndPruneHistory(history, scanTime)
 	local result = {}
 	if history then
-		for key, observation in pairs(history) do
+		for index = 1, #history do
+			local observation = history[index]
 			local timestamp = observation.timestamp
 			local value = observation.value
-
-			-- Early development builds stored one average under each Unix day number.
-			-- Convert that shape when encountered so test SavedVariables remain usable.
-			if not timestamp and type(key) == "number" and observation.count and observation.count > 0 then
-				timestamp = key * SECONDS_PER_DAY
-				value = observation.total / observation.count
-			end
 
 			-- Expiration happens only while processing a completed scan. Until then,
 			-- even data older than sixty days remains untouched in SavedVariables.
@@ -487,8 +481,10 @@ function module:ProcessScan(scope, scanDB, scanStats, callback)
 	local oldDB = addon.db[scope].auctionDB
 	local itemIDs = {}
 	local seen = {}
+	local scanItemIDs = {}
 	for itemID in pairs(scanDB) do
 		itemIDs[#itemIDs + 1] = itemID
+		scanItemIDs[#scanItemIDs + 1] = itemID
 		seen[itemID] = true
 	end
 	for itemID in pairs(oldDB) do
@@ -497,10 +493,6 @@ function module:ProcessScan(scope, scanDB, scanStats, callback)
 		end
 	end
 
-	local scanItemIDs = {}
-	for itemID in pairs(scanDB) do
-		scanItemIDs[#scanItemIDs + 1] = itemID
-	end
 	totalItems = #itemIDs + #scanItemIDs
 	processedItems = 0
 	completed = { scope = scope, callback = callback }
@@ -555,8 +547,8 @@ end
 function module:MergeSyncedMarketItem(scope, itemID, incoming, scopeDB)
 	scopeDB = scopeDB or addon.db[scope]
 	local stored = scopeDB.auctionDB[itemID] or {}
-	-- Rebuild from the fields still used by the current data model so obsolete
-	-- development fields cannot survive merely because this item was synchronized.
+	-- Copy only synchronized market state. Deal-cache and other scope-local fields
+	-- must not leak into a peer's canonical item record during a merge.
 	local current = {
 		auctionCount = stored.auctionCount,
 		auctionQuantity = stored.auctionQuantity,

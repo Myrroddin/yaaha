@@ -77,6 +77,8 @@ Options.lua
 Data\ConvertData.lua
 Data\DisenchantingData.lua
 Data\DisenchantingCollector.lua
+Data\EnchantingData.lua [AllowLoadGameType wrath]
+Modules\ProfessionScanner.lua
 Modules\DataProcessing.lua
 Modules\AuctionHouseUI.lua
 Modules\Scanner.lua

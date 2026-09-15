@@ -5,7 +5,6 @@ local GetNumLootItems = GetNumLootItems
 local GetTime = GetTime
 local LibStub = LibStub
 local next = next
-local tonumber = tonumber
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("DisenchantingCollector", "AceEvent-3.0")
@@ -50,7 +49,7 @@ function module:LOOT_OPENED()
 	local loot = {}
 	for slot = 1, GetNumLootItems() do
 		local link = GetLootSlotLink(slot)
-		local itemID = link and tonumber(link:match("item:(%d+)"))
+		local itemID = addon:GetItemID(link)
 		local _, _, quantity = GetLootSlotInfo(slot)
 		if itemID and disenchantingData:IsMaterial(itemID) and quantity and quantity > 0 then
 			loot[itemID] = (loot[itemID] or 0) + quantity

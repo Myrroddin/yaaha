@@ -4,7 +4,6 @@ local Enum = Enum
 local FACTION_ALLIANCE = FACTION_ALLIANCE
 local FACTION_HORDE = FACTION_HORDE
 local FACTION_NEUTRAL = FACTION_NEUTRAL
-local GetNormalizedRealmName = GetNormalizedRealmName
 local GetServerTime = GetServerTime
 local IsInGuild = IsInGuild
 local IsInInstance = IsInInstance
@@ -20,7 +19,6 @@ local tableConcat = table.concat
 local tableRemove = table.remove
 local type = type
 local UnitFactionGroup = UnitFactionGroup
-local UnitFullName = UnitFullName
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("Sync", "AceEvent-3.0")
@@ -31,6 +29,7 @@ local storage
 
 local COMM_PREFIX = "YAAHA1"
 local PROTOCOL_VERSION = 1
+local INITIAL_PULL_DELAY = 60
 local SECONDS_PER_DAY = 24 * 60 * 60
 local MAX_HISTORY_SECONDS = 60 * SECONDS_PER_DAY
 local playerFaction = UnitFactionGroup("player")
@@ -38,14 +37,16 @@ local playerName, playerRealm, playerFullName
 local BASE64_VARIANT = Enum.Base64Variant.StandardUrlSafe
 local oppositeFaction = playerFaction == "Alliance" and "Horde" or "Alliance"
 local AUCTION_HOUSE_TYPES = { "Alliance", "Horde", "Neutral" }
+local SYNC_MARKET_FIELDS = {
+	"auctionCount",
+	"auctionQuantity",
+	"currentMarketValue",
+	"lastScan",
+	"minBid",
+	"minBuyout",
+}
 local pendingPulls = {}
 local seenPulls = {}
-
-local function InitializePlayerIdentity()
-	playerName, playerRealm = UnitFullName("player")
-	playerRealm = playerRealm or GetNormalizedRealmName()
-	playerFullName = playerRealm and playerRealm ~= "" and playerName .. "-" .. playerRealm or playerName
-end
 
 local function IsSelf(sender)
 	return sender == playerName or sender == playerFullName
@@ -196,7 +197,8 @@ end
 
 local function BuildAdvertisement()
 	local scopes = {}
-	for _, auctionHouseType in pairs(AUCTION_HOUSE_TYPES) do
+	for index = 1, #AUCTION_HOUSE_TYPES do
+		local auctionHouseType = AUCTION_HOUSE_TYPES[index]
 		local scopeDB = ScopeEnabled(auctionHouseType) and GetScopeDB(auctionHouseType)
 		if scopeDB and (next(scopeDB.auctionDB) or next(scopeDB.realmSales)
 			or StatsSignature(scopeDB.auctionStats)) then
@@ -208,8 +210,8 @@ end
 
 local function CopyMarketSnapshot(itemData, fullHistory)
 	local delta = { history = {} }
-	for _, field in pairs({ "auctionCount", "auctionQuantity", "currentMarketValue", "lastScan",
-		"minBid", "minBuyout" }) do
+	for index = 1, #SYNC_MARKET_FIELDS do
+		local field = SYNC_MARKET_FIELDS[index]
 		delta[field] = itemData[field]
 	end
 	-- Rolling values are deterministic products of retained scan history. A full
@@ -261,7 +263,8 @@ end
 
 local function BuildPush(scopeFilter, fullHistory)
 	local scopes = {}
-	for _, auctionHouseType in pairs(AUCTION_HOUSE_TYPES) do
+	for index = 1, #AUCTION_HOUSE_TYPES do
+		local auctionHouseType = AUCTION_HOUSE_TYPES[index]
 		local scopeDB = (not scopeFilter or scopeFilter[auctionHouseType])
 			and ScopeEnabled(auctionHouseType) and GetScopeDB(auctionHouseType)
 		if scopeDB then
@@ -486,7 +489,8 @@ local function FinishPull(requestID)
 		return
 	end
 	local selections = {}
-	for _, auctionHouseType in pairs(AUCTION_HOUSE_TYPES) do
+	for index = 1, #AUCTION_HOUSE_TYPES do
+		local auctionHouseType = AUCTION_HOUSE_TYPES[index]
 		local scopeDB = ScopeEnabled(auctionHouseType) and GetScopeDB(auctionHouseType)
 		local localSummary = scopeDB and BuildScopeSummary(scopeDB) or nil
 		local localSignature = SummarySignature(localSummary)
@@ -649,7 +653,8 @@ function module:YAAHA_SCAN_PROCESSED()
 	end
 	-- A completed local scan is the normal synchronization trigger. Receiving
 	-- peer data never generates another message, preventing echo loops.
-	for _, auctionHouseType in pairs(AUCTION_HOUSE_TYPES) do
+	for index = 1, #AUCTION_HOUSE_TYPES do
+		local auctionHouseType = AUCTION_HOUSE_TYPES[index]
 		local push = BuildPush({ [auctionHouseType] = true })
 		local encoded
 		if IsInGuild() then
@@ -660,19 +665,29 @@ function module:YAAHA_SCAN_PROCESSED()
 end
 
 function module:PLAYER_ENTERING_WORLD(_, isInitialLogin)
-	if not isInitialLogin or not CanSyncNow() then
+	if not isInitialLogin then
 		return
 	end
 	-- Initial character login is the sole pull operation. Reloading or changing
-	-- zones cannot request data, and an unanswered request remains silent.
-	if IsInGuild() then
-		RequestPush("GUILD")
-	end
-	RequestPush("YELL")
+	-- zones cannot request data, and an unanswered request remains silent. Waiting
+	-- gives the client and other addons time to finish their own login work, while
+	-- naturally avoiding traffic from characters which log out again immediately.
+	C_Timer.After(INITIAL_PULL_DELAY, function()
+		-- Eligibility may change during the delay, particularly if the player enters
+		-- an instance. Do not send a deferred request under conditions which would
+		-- have prevented an immediate one.
+		if not CanSyncNow() then
+			return
+		end
+		if IsInGuild() then
+			RequestPush("GUILD")
+		end
+		RequestPush("YELL")
+	end)
 end
 
 function module:OnEnable()
-	InitializePlayerIdentity()
+	playerName, playerRealm, playerFullName = addon:GetPlayerIdentity()
 	addon:RegisterComm(COMM_PREFIX, function(...)
 		module:OnCommReceived(...)
 	end)

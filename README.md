@@ -32,6 +32,7 @@ Configurable item tooltips can show:
 - Personal and realm sale information
 - Vendor buy and sell prices
 - Average purchase value for items still owned
+- Known-recipe crafting costs, material breakdowns, and estimated profit or loss
 - Disenchanting results and estimated value
 
 Hold Shift to multiply prices by the stack size under the cursor.
@@ -45,6 +46,18 @@ YAAHA never purchases anything automatically. The player chooses whether to bid,
 ### Sale information
 
 YAAHA follows auction outcomes to calculate the player's sale rate. Recent realm sale rates, quantities sold, and average sale values are also available from the player's observations and synchronized data.
+
+### Known professions
+
+Opening a profession teaches YAAHA which recipes that character knows. YAAHA can then compare current-character and same-faction crafting costs, including cheaper materials made by another recorded character.
+
+### Why crafting costs may look different
+
+YAAHA does not assume that every required material can be bought for the single lowest buyout currently recorded. That auction may already be gone, and the next seller is not obliged to offer the same price.
+
+For example, if two Peacebloom are listed for 15 silver and 55 silver, buying both costs 70 silver, or an average of 35 silver each. A calculation based only on the minimum buyout would incorrectly value each Peacebloom at 15 silver, making the finished item look more profitable than it really is.
+
+YAAHA instead uses its market values and considers less expensive ways to obtain each material, such as crafting, conversion, or an unlimited-supply vendor. For readers interested in how auction listings can be turned into a more representative market value, TradeSkillMaster provides a helpful [plain-language explanation of market-value calculation](https://support.tradeskillmaster.com/custom-strings/how-is-auctiondb-market-value-calculated?).
 
 ### Synchronization
 

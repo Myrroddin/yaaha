@@ -233,6 +233,8 @@ function addon:GetOptions()
 							["16-realmSaleRate"] = L["Realm sale rate"],
 							["17-realmSoldPerDay"] = L["Realm sold per day"],
 							["18-realmAverageSaleValue"] = L["Realm average sale value"],
+							["19-craftingValue"] = L["Crafting cost"],
+							["20-craftingResults"] = L["Crafting breakdown"],
 						},
 						get = function(_, key)
 							return addon.db.profile.tooltip[key]
@@ -311,6 +313,8 @@ function addon:GetOptions()
 						name = L["AddOn Compartment"],
 						desc = L["Show the minimap button in the addon compartment."],
 						hidden = function()
+							-- The bundled LibDBIcon provides this newer method, but WoWLua-LS's library definition does not yet include it.
+							---@diagnostic disable-next-line: undefined-field
 							return not LibDBIcon:IsButtonCompartmentAvailable()
 						end,
 						get = function()

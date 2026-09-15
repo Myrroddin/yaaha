@@ -375,27 +375,13 @@ function module:GetValue(itemInfo, scope, priceDB)
 		return
 	end
 	local auctionDB = priceDB or addon.db[scope or "factionrealm"].auctionDB
-	local sourceOrder = {
-		"currentMarketValue", "midweekMarketValue", "weeklyMarketValue",
-		"biweeklyMarketValue", "monthlyMarketValue", "bimonthlyMarketValue",
-	}
 	local total = 0
 	local complete = true
 	for index = 1, #disenchant.results do
 		local result = disenchant.results[index]
 		local prices = auctionDB[result.itemID]
-		result.marketValue = 0
-		if prices then
-			for sourceIndex = 1, #sourceOrder do
-				local source = sourceOrder[sourceIndex]
-				if prices[source] and prices[source] > 0 then
-					result.marketValue = prices[source]
-					result.priceSource = source
-					break
-				end
-			end
-		end
-		result.missingPrice = result.marketValue == 0
+		result.marketValue, result.priceSource = addon:GetFirstMarketValue(prices)
+		result.missingPrice = not result.marketValue
 		if result.missingPrice then
 			result.marketValue = nil
 			result.expectedValue = nil

@@ -4,20 +4,37 @@ local COPPER_AMOUNT_TEXTURE = COPPER_AMOUNT_TEXTURE
 local floor = math.floor
 local format = string.format
 local FormatLargeNumber = FormatLargeNumber
+local GetNormalizedRealmName = GetNormalizedRealmName
 local GOLD_AMOUNT_SYMBOL = GOLD_AMOUNT_SYMBOL
 local GOLD_AMOUNT_TEXTURE = GOLD_AMOUNT_TEXTURE
+local LE_GAME_ERR_AUCTION_BID_OWN = LE_GAME_ERR_AUCTION_BID_OWN
+local LE_GAME_ERR_AUCTION_DATABASE_ERROR = LE_GAME_ERR_AUCTION_DATABASE_ERROR
+local LE_GAME_ERR_AUCTION_HIGHER_BID = LE_GAME_ERR_AUCTION_HIGHER_BID
+local LE_GAME_ERR_ITEM_MAX_COUNT = LE_GAME_ERR_ITEM_MAX_COUNT
+local LE_GAME_ERR_ITEM_NOT_FOUND = LE_GAME_ERR_ITEM_NOT_FOUND
+local LE_GAME_ERR_NOT_ENOUGH_MONEY = LE_GAME_ERR_NOT_ENOUGH_MONEY
 local LibStub = LibStub
+local pairs = pairs
 local SILVER_AMOUNT_SYMBOL = SILVER_AMOUNT_SYMBOL
 local SILVER_AMOUNT_TEXTURE = SILVER_AMOUNT_TEXTURE
+local stringMatch = string.match
 local stringSub = string.sub
 local tableConcat = table.concat
+local tonumber = tonumber
 local UnitFullName = UnitFullName
 
 ---@class YAAHA: AceAddon, AceComm-3.0, AceConsole-3.0, AceSerializer-3.0, LibAboutPanel-2.0
 ---@field db AceDBObject-3.0!
 ---@field brokerObject table?
 ---@field FireAPIEvent fun(self: YAAHA, event: string, ...)
+---@field GetFirstMarketValue fun(self: YAAHA, data: table?): number?, string?
+---@field GetItemID fun(self: YAAHA, link: string?): integer?
 ---@field GetOptions fun(self: YAAHA): table
+---@field GetPlayerIdentity fun(self: YAAHA): string?, string?, string?
+---@field IsAlt fun(self: YAAHA, name: string?, fullName?: string): boolean
+---@field IsAuctionActionError fun(self: YAAHA, errorType: number): boolean
+---@field IsDealProfitable fun(self: YAAHA, cost: number?, value: number?): boolean
+---@field IsPlayerAuction fun(self: YAAHA, owner: string?, ownerFullName?: string): boolean
 ---@field RefreshBrokerText fun(self: YAAHA)
 local addon = LibStub("AceAddon-3.0"):NewAddon("YAAHA", "AceComm-3.0", "AceConsole-3.0", "AceSerializer-3.0", "LibAboutPanel-2.0")
 local AceConfigDialog = LibStub("AceConfigDialog-3.0")
@@ -26,6 +43,14 @@ local LibDBIcon = LibStub("LibDBIcon-1.0")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
 local BROKER_ICON = "Interface\\Icons\\INV_Misc_Coin_01"
+local MARKET_VALUE_FIELDS = {
+	"currentMarketValue",
+	"midweekMarketValue",
+	"weeklyMarketValue",
+	"biweeklyMarketValue",
+	"monthlyMarketValue",
+	"bimonthlyMarketValue",
+}
 
 local defaults = {
 	char = {
@@ -42,7 +67,9 @@ local defaults = {
 		auctionStats = {},
 		disenchantList = {},
 		knownProfessions = {
-			["*"] = {},
+			["*"] = {
+				["*"] = {}
+			},
 		},
 		inventoryPurchases = {},
 		inventoryTransfers = {},
@@ -87,6 +114,8 @@ local defaults = {
 			["04-midweekMarketValue"] = true,
 			["12-vendorSell"] = true,
 			["13-vendorBuy"] = true,
+			["19-craftingValue"] = true,
+			["20-craftingResults"] = true,
 			["*"] = false,
 		},
 	},
@@ -106,13 +135,7 @@ local defaults = {
 	},
 }
 
-local char, factionrealm, global, profile, realm
-
-function addon:RefreshBrokerText()
-	if self.brokerObject then
-		self.brokerObject.text = self:GetModule("VendorFlipTracking"):GetFormattedProfit()
-	end
-end
+local playerName, playerRealm, playerFullName
 
 local function InitializeBroker()
 	addon.brokerObject = LibDataBroker:NewDataObject("YAAHA", {
@@ -132,6 +155,9 @@ local function InitializeBroker()
 			tooltip:Show()
 		end,
 	})
+	-- YAAHA keeps lockOnDegree beside LibDBIcon's keys. The library accepts extra
+	-- addon-owned fields, although WoWLua-LS's narrow DB definition does not.
+	---@diagnostic disable-next-line: inject-field
 	LibDBIcon:Register("YAAHA", addon.brokerObject, addon.db.global.minimap)
 end
 
@@ -139,12 +165,10 @@ function addon:OnInitialize()
 	self.db = LibStub("AceDB-3.0"):New("YAAHADB", defaults, true)
 	self:GetModule("Storage"):RestoreAuctionData()
 
-	-- Bidder information may omit the realm. Remember both forms for every
-	-- character which loads YAAHA so vendor deals never compete with an account alt.
-	local playerName, playerRealm = UnitFullName("player")
-	self.db.global.alts[playerName] = true
-	if playerRealm and playerRealm ~= "" then
-		self.db.global.alts[playerName .. "-" .. playerRealm] = true
+	-- Store one canonical identity. IsAlt handles Blizzard results which omit the realm.
+	local _, _, fullName = self:GetPlayerIdentity()
+	if fullName then
+		self.db.global.alts[fullName] = true
 	end
 
 	local options = self:GetOptions()
@@ -160,6 +184,87 @@ end
 
 function addon:OpenConfig()
 	AceConfigDialog:Open("YAAHA")
+end
+
+
+function addon:GetFirstMarketValue(data)
+	if not data then
+		return
+	end
+	for index = 1, #MARKET_VALUE_FIELDS do
+		local field = MARKET_VALUE_FIELDS[index]
+		local value = data[field]
+		if value and value > 0 then
+			return value, field
+		end
+	end
+end
+
+function addon:GetItemID(link)
+	local itemID = link and stringMatch(link, "item:(%d+)")
+	return itemID and tonumber(itemID)
+end
+
+function addon:GetPlayerIdentity()
+	if not playerFullName then
+		playerName, playerRealm = UnitFullName("player")
+		playerRealm = playerRealm or GetNormalizedRealmName()
+		if playerName and playerRealm and playerRealm ~= "" then
+			playerFullName = playerName .. "-" .. playerRealm
+		end
+	end
+	return playerName, playerRealm, playerFullName
+end
+
+function addon:IsDealProfitable(cost, value)
+	if not cost or cost <= 0 or not value or value <= 0 then
+		return false
+	end
+	return self.db.profile.includeBreakEvenDeals and cost <= value or cost < value
+end
+
+function addon:IsPlayerAuction(owner, ownerFullName)
+	local name, _, fullName = self:GetPlayerIdentity()
+	return owner == name or owner == fullName or ownerFullName == fullName
+		or self:IsAlt(owner, ownerFullName)
+end
+
+function addon:IsAuctionActionError(errorType)
+	return errorType == LE_GAME_ERR_AUCTION_BID_OWN
+		or errorType == LE_GAME_ERR_AUCTION_DATABASE_ERROR
+		or errorType == LE_GAME_ERR_AUCTION_HIGHER_BID
+		or errorType == LE_GAME_ERR_ITEM_MAX_COUNT
+		or errorType == LE_GAME_ERR_ITEM_NOT_FOUND
+		or errorType == LE_GAME_ERR_NOT_ENOUGH_MONEY
+end
+
+-- Blizzard may report auction, mail, and trade characters as either name or
+-- name-realm. YAAHA stores only full names, but accepts either form when
+-- recognizing an account character whose realm suffix was omitted.
+function addon:IsAlt(name, fullName)
+	local alts = self.db.global.alts
+	if fullName and alts[fullName] or name and alts[name] then
+		return true
+	end
+
+	local shortName = name and name:match("^([^-]+)")
+		or fullName and fullName:match("^([^-]+)")
+	if not shortName then
+		return false
+	end
+
+	for altFullName, isAlt in pairs(alts) do
+		if isAlt and altFullName:match("^([^-]+)-") == shortName then
+			return true
+		end
+	end
+	return false
+end
+
+function addon:RefreshBrokerText()
+	if self.brokerObject then
+		self.brokerObject.text = self:GetModule("VendorFlipTracking"):GetFormattedProfit()
+	end
 end
 
 function addon:FormatMoney(copper, showZero, numberColor)

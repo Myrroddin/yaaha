@@ -18,9 +18,7 @@ local hooksecurefunc = hooksecurefunc
 local LibStub = LibStub
 local min = math.min
 local pairs = pairs
-local stringMatch = string.match
 local tableRemove = table.remove
-local tonumber = tonumber
 
 AceConfigRegistry = LibStub("AceConfigRegistry-3.0")
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
@@ -42,10 +40,6 @@ local tradeSnapshot
 
 local function GetInventory()
 	return addon.db.realm.vendorFlipInventory
-end
-
-local function GetItemID(itemLink)
-	return itemLink and tonumber(stringMatch(itemLink, "item:(%d+)")) or nil
 end
 
 local function CharacterName(name)
@@ -200,7 +194,7 @@ local function ReadTradeItems(infoFunction, linkFunction)
 	local items = {}
 	for index = 1, 6 do
 		local _, _, quantity = infoFunction(index)
-		local itemID = GetItemID(linkFunction(index))
+		local itemID = addon:GetItemID(linkFunction(index))
 		if itemID and quantity and quantity > 0 then
 			items[itemID] = (items[itemID] or 0) + quantity
 		end
@@ -236,7 +230,7 @@ local function CaptureOutgoingMail(recipient, subject)
 		local itemName, _, quantity = GetSendMailItem(index)
 		if itemName and quantity and quantity > 0 then
 			local itemLink = GetSendMailItemLink(index)
-			local itemID = GetItemID(itemLink)
+			local itemID = addon:GetItemID(itemLink)
 			if itemID then
 				items[itemID] = (items[itemID] or 0) + quantity
 			end
@@ -292,7 +286,7 @@ function module:MAIL_SEND_SUCCESS()
 		return
 	end
 	local kindCount, itemID, quantity = CountItemKinds(outgoingMail.items)
-	local recipientIsAlt = addon.db.global.alts[outgoingMail.recipient]
+	local recipientIsAlt = addon:IsAlt(outgoingMail.recipient)
 	for outgoingItemID, outgoingQuantity in pairs(outgoingMail.items) do
 		if recipientIsAlt then
 			inventoryAverageBuy:MoveOutOfInventory(outgoingItemID, outgoingQuantity)
@@ -359,7 +353,7 @@ function module:TRADE_CLOSED()
 		return
 	end
 	local outgoingKinds, outgoingItemID, outgoingQuantity = CountItemKinds(tradeSnapshot.outgoing)
-	local targetIsAlt = tradeSnapshot.target and addon.db.global.alts[tradeSnapshot.target]
+	local targetIsAlt = tradeSnapshot.target and addon:IsAlt(tradeSnapshot.target)
 	for itemID, quantity in pairs(tradeSnapshot.outgoing) do
 		if targetIsAlt then
 			inventoryAverageBuy:MoveOutOfInventory(itemID, quantity)
@@ -385,8 +379,7 @@ function module:TRADE_CLOSED()
 		inventoryAverageBuy:RecordPurchase(incomingItemID, incomingQuantity, tradeSnapshot.moneyGiven)
 		local _, _, _, _, _, _, _, _, _, _, vendorSell = C_Item.GetItemInfo(incomingItemID)
 		local vendorReturn = vendorSell and vendorSell * incomingQuantity or 0
-		if vendorReturn > 0 and (addon.db.profile.includeBreakEvenDeals
-			and tradeSnapshot.moneyGiven <= vendorReturn or tradeSnapshot.moneyGiven < vendorReturn) then
+		if addon:IsDealProfitable(tradeSnapshot.moneyGiven, vendorReturn) then
 			self:RecordPurchase(incomingItemID, incomingQuantity, tradeSnapshot.moneyGiven)
 		end
 	end

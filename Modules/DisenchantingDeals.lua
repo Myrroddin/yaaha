@@ -11,14 +11,7 @@ local GetAuctionItemLink = GetAuctionItemLink
 local GetMoney = GetMoney
 local GetNumAuctionItems = GetNumAuctionItems
 local GetTime = GetTime
-local LE_GAME_ERR_AUCTION_BID_OWN = LE_GAME_ERR_AUCTION_BID_OWN
-local LE_GAME_ERR_AUCTION_DATABASE_ERROR = LE_GAME_ERR_AUCTION_DATABASE_ERROR
-local LE_GAME_ERR_AUCTION_HIGHER_BID = LE_GAME_ERR_AUCTION_HIGHER_BID
-local LE_GAME_ERR_ITEM_MAX_COUNT = LE_GAME_ERR_ITEM_MAX_COUNT
-local LE_GAME_ERR_ITEM_NOT_FOUND = LE_GAME_ERR_ITEM_NOT_FOUND
-local LE_GAME_ERR_NOT_ENOUGH_MONEY = LE_GAME_ERR_NOT_ENOUGH_MONEY
 local LibStub = LibStub
-local next = next
 local pairs = pairs
 local PlaceAuctionBid = PlaceAuctionBid
 local QueryAuctionItems = QueryAuctionItems
@@ -26,7 +19,6 @@ local sort = table.sort
 local StaticPopupDialogs = StaticPopupDialogs
 local StaticPopup_Hide = StaticPopup_Hide
 local StaticPopup_Show = StaticPopup_Show
-local UnitFullName = UnitFullName
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("DisenchantingDeals", "AceEvent-3.0")
@@ -57,16 +49,6 @@ local statusElapsed = 0
 local wasScannerBusy
 local updateFrame = CreateFrame("Frame")
 
-local playerName, playerRealm = UnitFullName("player")
-local playerFullName = playerRealm and playerRealm ~= "" and playerName .. "-" .. playerRealm or playerName
-
-local function IsProfitable(buyout, expectedValue)
-	if not buyout or buyout <= 0 or not expectedValue or expectedValue <= 0 then
-		return false
-	end
-	return addon.db.profile.includeBreakEvenDeals and buyout <= expectedValue or buyout < expectedValue
-end
-
 local function SetStatus(text)
 	if statusText then
 		statusText:SetText(text)
@@ -80,7 +62,7 @@ local function GetCacheCounts()
 	for _, itemData in pairs(disenchantList or {}) do
 		local itemListings = 0
 		for _, auction in pairs(itemData.auctions) do
-			if IsProfitable(auction.buyout, itemData.expectedValue) then
+			if addon:IsDealProfitable(auction.buyout, itemData.expectedValue) then
 				itemListings = itemListings + (auction.numAuctions or 1)
 			end
 		end
@@ -108,12 +90,6 @@ local function ScheduleSearch()
 	searchDeadline = GetTime() + QUERY_TIMEOUT
 end
 
-local function IsPlayerAuction(owner, ownerFullName)
-	return owner == playerName or owner == playerFullName or ownerFullName == playerFullName
-		or owner and addon.db.global.alts[owner]
-		or ownerFullName and addon.db.global.alts[ownerFullName]
-end
-
 local function ReadListing(index)
 	local _, _, count, _, _, _, _, _, _, buyout, _, _, _, owner, ownerFullName, _, itemID, hasAllInfo = GetAuctionItemInfo("list", index)
 	if hasAllInfo == false then
@@ -136,7 +112,7 @@ end
 local function MatchesRequest(listing, request)
 	return listing.itemID == request.itemID and listing.count == request.count
 		and listing.buyout == request.buyout
-		and not IsPlayerAuction(listing.owner, listing.ownerFullName)
+		and not addon:IsPlayerAuction(listing.owner, listing.ownerFullName)
 end
 
 local function FinishSearch(message)
@@ -199,15 +175,6 @@ local function ContinueAfterCandidate(requery)
 	end
 end
 
-local function IsAuctionActionError(errorType)
-	return errorType == LE_GAME_ERR_AUCTION_BID_OWN
-		or errorType == LE_GAME_ERR_AUCTION_DATABASE_ERROR
-		or errorType == LE_GAME_ERR_AUCTION_HIGHER_BID
-		or errorType == LE_GAME_ERR_ITEM_MAX_COUNT
-		or errorType == LE_GAME_ERR_ITEM_NOT_FOUND
-		or errorType == LE_GAME_ERR_NOT_ENOUGH_MONEY
-end
-
 local function ResolveTransaction(succeeded, confirmedFailure)
 	transactionPending = false
 	if not running or not currentRequest then
@@ -256,7 +223,7 @@ end
 local function ShowCandidate(listing)
 	local scope = scanner:GetAuctionScope()
 	local disenchant = scope and disenchantingData:GetValue(listing.itemID, scope)
-	if not disenchant or not IsProfitable(listing.buyout, disenchant.expectedValue) then
+	if not disenchant or not addon:IsDealProfitable(listing.buyout, disenchant.expectedValue) then
 		return false
 	end
 
@@ -322,7 +289,7 @@ local function BuildQueue(disenchantList)
 	local requests = {}
 	for itemID, itemData in pairs(disenchantList or {}) do
 		for _, auction in pairs(itemData.auctions) do
-			if IsProfitable(auction.buyout, itemData.expectedValue) then
+			if addon:IsDealProfitable(auction.buyout, itemData.expectedValue) then
 				requests[#requests + 1] = {
 					itemID = itemID,
 					count = auction.count,
@@ -430,7 +397,7 @@ function module:BuyCandidate(candidate)
 	local scope = scanner:GetAuctionScope()
 	local disenchant = listing and scope and disenchantingData:GetValue(listing.itemID, scope)
 	if not listing or not MatchesRequest(listing, candidate)
-		or not disenchant or not IsProfitable(listing.buyout, disenchant.expectedValue) then
+		or not disenchant or not addon:IsDealProfitable(listing.buyout, disenchant.expectedValue) then
 		SetStatus(L["Auction listing changed; searching again."])
 		ContinueAfterCandidate(true)
 		return
@@ -598,7 +565,7 @@ function module:CHAT_MSG_SYSTEM(_, message)
 end
 
 function module:UI_ERROR_MESSAGE(_, errorType)
-	if transactionPending and IsAuctionActionError(errorType) then
+	if transactionPending and addon:IsAuctionActionError(errorType) then
 		ResolveTransaction(false, true)
 	end
 end

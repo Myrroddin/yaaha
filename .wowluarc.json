@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/TradeSkillMaster/wowlua-ls/v0.30.5/editors/vscode/wowluarc.schema.json",
+  "$schema": "https://raw.githubusercontent.com/TradeSkillMaster/wowlua-ls/main/editors/vscode/wowluarc.schema.json",
   "addonRoot": true,
   "library": [
     "Libs/"

@@ -13,11 +13,12 @@ YAAHA exposes a small public API for other World of Warcraft addons through the 
 - [Functions](#functions)
   - [`GetVersion()`](#getversion)
   - [`GetItemData(itemID, auctionHouseType)`](#getitemdataitemid-auctionhousetype)
-  - [Market-value wrappers](#market-value-wrappers)
+  - [Item-data wrappers](#item-data-wrappers)
   - [`GetAuctionHouseStats(auctionHouseType)`](#getauctionhousestatsauctionhousetype)
   - [`GetVendorFlipProfit()`](#getvendorflipprofit)
   - [Realm-data functions](#realm-data-functions)
   - [Disenchanting functions](#disenchanting-functions)
+  - [Crafting functions](#crafting-functions)
 - [Callbacks](#callbacks)
   - [`AUCTION_HOUSE_DATA_UPDATED`](#auction_house_data_updated)
 - [Conventions](#conventions)
@@ -131,7 +132,7 @@ Returns `nil` if the request is invalid or YAAHA has no public data for the item
 
 Every key is optional. Unknown, expired, and inapplicable values are omitted.
 
-### Market-value wrappers
+### Item-data wrappers
 
 The following functions accept the same `(itemID, auctionHouseType)` arguments as `GetItemData()` and return only the named value, or `nil` when it is unavailable:
 
@@ -220,6 +221,23 @@ For each material, expected value uses the first positive source in this order: 
 | `auctionHouseType` | `string` or `nil` | Optional auction-house type using the same rules as `GetItemData()`. |
 | `fullResults` | `boolean` or `nil` | Optional. `true` returns the full breakdown; `false` or omitted returns only the summed value. |
 
+#### Disenchanting examples
+
+Get only the expected disenchant value:
+
+```lua
+local value = YAAHA_API.GetDisenchantValue(2589)
+```
+
+Request the complete priced breakdown when individual results are needed:
+
+```lua
+local results = YAAHA_API.GetDisenchantValue(2589, "Alliance", true)
+if results then
+    print(results.expectedValue)
+end
+```
+
 When `fullResults` is `false` or omitted, `GetDisenchantValue()` returns the summed expected value in copper. It returns `nil` when any possible material lacks a positive market value, because a partial sum could be mistaken for a complete valuation.
 
 When `fullResults` is `true`, the function returns a new `YAAHA_API.PricedDisenchantResults` table containing `expectedValue`, `requiredSkill`, `sampleCount`, and a `results` array. The top-level `expectedValue` is `nil` when any material price is missing, while the individual known material values remain available in `results`. Each `YAAHA_API.PricedDisenchantMaterial` contains:
@@ -237,6 +255,66 @@ When `fullResults` is `true`, the function returns a new `YAAHA_API.PricedDisenc
 | `missingPrice` | `boolean` | `true` when the material was not found with a positive value in the selected auction database. |
 
 The returned table is a defensive snapshot. Changing it does not modify YAAHA's internal or saved data.
+
+### Crafting functions
+
+YAAHA records recipes when the current character opens a profession window. Crafting calculations use those known recipes and prices from the requested auction house without combining auction-house types.
+
+| Function | Description |
+| --- | --- |
+| `GetCraftingValue(itemID, auctionHouseType, fullResults, currentCharacterOnly)` | Returns the cheapest known crafting value for an output item. |
+| `GetRecipeCraftingValue(spellID, auctionHouseType, fullResults, currentCharacterOnly)` | Returns the crafting value of a specific known recipe, including direct enchants which have no output item. |
+
+#### Crafting-value arguments
+
+| Value | Type | Description |
+| --- | --- | --- |
+| `itemID` or `spellID` | `number` | Positive integer identifying the crafted item or recipe spell. |
+| `auctionHouseType` | `string` or `nil` | Optional auction-house type using the same rules as `GetItemData()`. |
+| `fullResults` | `boolean` or `nil` | `true` returns the priced recipe and reagent breakdown; otherwise only the per-unit crafting value is returned. |
+| `currentCharacterOnly` | `boolean` or `nil` | `true` restricts recipes to the logged-in character; otherwise all recorded same-faction characters are considered. |
+
+#### Crafting examples
+
+Get the least expensive known per-unit crafting value for an item:
+
+```lua
+local value = YAAHA_API.GetCraftingValue(6452)
+```
+
+Request the full recipe and material breakdown, restricted to recipes known by the current character:
+
+```lua
+local results = YAAHA_API.GetCraftingValue(6452, nil, true, true)
+if results then
+    print(results.value, results.outputQuantity)
+end
+```
+
+For every reagent, YAAHA independently considers its first positive market value, unlimited-vendor price, conversion value, and recursively calculated crafting value. The least expensive available source is used. Conversion values use the converted source material's market value; they do not recursively reuse its vendor or crafting value.
+
+In Wrath/Titan, an equipment-enchant result represents its auctionable scroll. Its crafting value includes the cheapest compatible armor or weapon vellum available through the same material-cost calculation. Classic Era and Burning Crusade equipment enchants retain their reagent cost but have no auctionable output item.
+
+Profession snapshots from an earlier game-client build are marked as stale. YAAHA prefers a current-build copy of a recipe whenever one is available, but retains a stale recipe as a fallback until that character opens the profession and refreshes it. Full crafting results expose this state to consumers.
+
+Variable-yield recipes divide the total reagent value by their average output. A recipe is unavailable when any required reagent has no usable price. All positive reagent subtotals and crafting values exposed by the API are rounded upward to the next whole copper. They never round down or use half-up rounding. A positive fractional value therefore becomes at least `1` copper, while unavailable data remains `nil`.
+
+When `fullResults` is true, the returned `YAAHA_API.CraftingResult` is a defensive snapshot containing:
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `value` | `number` | Per-unit crafting value in copper. |
+| `totalReagentValue` | `number` | Total reagent value for one recipe cast. |
+| `outputQuantity` | `number` | Fixed output or average of the minimum and maximum output. |
+| `character` | `string` | Character whose known recipe supplied the result. |
+| `profession` | `string` | Localized profession name. |
+| `stale` | `boolean` | Whether the profession snapshot predates the current game-client build. |
+| `spellID` | `number` | Recipe spell ID. |
+| `outputItemID` | `number` or `nil` | Crafted item ID; absent for a direct enchant. |
+| `name` | `string` | Localized recipe name. |
+| `materials` | `table` | Reagent entries containing `itemID`, `quantity`, `unitValue`, `totalValue`, and the selected `source`. Conversion and nested crafting details are included when applicable. |
+
+The material `source` is exactly `"market"`, `"vendor"`, `"convert"`, or `"crafting"`. The two functions return `nil` when the recipe is unknown or a complete value cannot be calculated.
 
 ## Callbacks
 
@@ -327,4 +405,4 @@ nil  → nil
 1.50 → 2
 ```
 
-Negative monetary values are invalid and are not returned by YAAHA.
+Negative monetary values are invalid and are not returned, except from `GetVendorFlipProfit()`, where a negative running balance is meaningful.

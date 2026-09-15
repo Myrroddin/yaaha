@@ -7,7 +7,6 @@ local GetInboxItem = GetInboxItem
 local GetInboxInvoiceInfo = GetInboxInvoiceInfo
 local GetInboxNumItems = GetInboxNumItems
 local GetNumAuctionItems = GetNumAuctionItems
-local GetNormalizedRealmName = GetNormalizedRealmName
 local GetServerTime = GetServerTime
 local hooksecurefunc = hooksecurefunc
 local LibStub = LibStub
@@ -15,7 +14,6 @@ local pairs = pairs
 local stringGsub = string.gsub
 local stringMatch = string.match
 local tableRemove = table.remove
-local UnitFullName = UnitFullName
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("SaleCollector", "AceEvent-3.0")
@@ -30,12 +28,7 @@ local SALE_LEDGER_LIFETIME = 60 * SECONDS_PER_DAY
 local playerName, playerRealm, playerFullName
 local OUTBID_MAIL_PATTERN = AUCTION_OUTBID_MAIL_SUBJECT
 	and "^" .. stringGsub(AUCTION_OUTBID_MAIL_SUBJECT, "%%s", "(.+)") .. "$"
-
-local function InitializePlayerIdentity()
-	playerName, playerRealm = UnitFullName("player")
-	playerRealm = playerRealm or GetNormalizedRealmName()
-	playerFullName = playerRealm and playerRealm ~= "" and playerName .. "-" .. playerRealm or playerName
-end
+local SALES_SCOPES = { "factionrealm", "realm" }
 
 local function TransactionKey(seller, itemID, count, saleValue)
 	return format("%s\031%d\031%d\031%d", seller or "", itemID, count, saleValue)
@@ -59,7 +52,8 @@ end
 
 local function PruneAllRealmSales()
 	local now = GetServerTime()
-	for _, scope in pairs({ "factionrealm", "realm" }) do
+	for index = 1, #SALES_SCOPES do
+		local scope = SALES_SCOPES[index]
 		local realmSales = addon.db[scope].realmSales
 		for itemID, data in pairs(realmSales) do
 			PruneRealmSales(data, now)
@@ -346,7 +340,7 @@ local function RecordBuyerCost(invoice)
 		if pending.itemID == invoice.itemID and pending.count == invoice.count
 			and (not pending.price or pending.price == saleValue) then
 			if not pending.inventoryCostRecorded then
-				if not pending.seller or not addon.db.global.alts[pending.seller] then
+				if not pending.seller or not addon:IsAlt(pending.seller) then
 					inventoryAverageBuy:RecordPurchaseOutsideInventory(
 						pending.itemID, pending.count, saleValue)
 				end
@@ -407,7 +401,7 @@ local function CollectAuctionInvoice(invoice)
 			if pending.itemID == invoice.itemID and pending.count == invoice.count
 				and (not pending.price or pending.price == saleValue) then
 				if not pending.inventoryCostRecorded
-					and (not pending.seller or not addon.db.global.alts[pending.seller]) then
+					and (not pending.seller or not addon:IsAlt(pending.seller)) then
 					inventoryAverageBuy:RecordPurchase(pending.itemID, pending.count, saleValue)
 				end
 				if pending.vendorFlip and not pending.vendorFlipCostRecorded then
@@ -515,8 +509,8 @@ local function RecordPendingPurchase(listType, index, price, action, dealType)
 	end
 	local _, _, _, _, _, _, _, _, _, _, vendorSell = C_Item.GetItemInfo(itemID)
 	local vendorReturn = vendorSell and vendorSell * count or 0
-	local vendorFlip = dealType == "vendor" or dealType == nil and price and price > 0 and vendorReturn > 0
-		and (addon.db.profile.includeBreakEvenDeals and price <= vendorReturn or price < vendorReturn)
+	local vendorFlip = dealType == "vendor" or dealType == nil
+		and addon:IsDealProfitable(price, vendorReturn)
 
 	local now = GetServerTime()
 	local pending = addon.db.char.pendingPurchases
@@ -580,7 +574,7 @@ function module:OnInitialize()
 end
 
 function module:OnEnable()
-	InitializePlayerIdentity()
+	playerName, playerRealm, playerFullName = addon:GetPlayerIdentity()
 	self:RegisterEvent("AUCTION_OWNED_LIST_UPDATE", ReadOwnedAuctions)
 	self:RegisterEvent("MAIL_INBOX_UPDATE", CacheAuctionInvoices)
 	self:RegisterEvent("MAIL_CLOSED", CloseMailbox)
