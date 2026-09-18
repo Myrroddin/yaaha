@@ -51,6 +51,8 @@ function addon:GetOptions()
 					auctionHouseOpeningPage = {
 						order = 10,
 						type = "select",
+						width = "relative",
+						relWidth = 0.5,
 						name = L["Open auction house to"],
 						desc = L["Choose the page shown whenever the auction house is opened."],
 						values = {
@@ -72,6 +74,8 @@ function addon:GetOptions()
 					coinDisplayStyle = {
 						order = 20,
 						type = "select",
+						width = "relative",
+						relWidth = 0.5,
 						name = L["Coin display"],
 						desc = L["Choose between Blizzard's coin textures and localized denomination letters."],
 						values = {
@@ -89,6 +93,8 @@ function addon:GetOptions()
 					factionrealm = {
 						order = 30,
 						type = "toggle",
+						width = "relative",
+						relWidth = 0.5,
 						name = L["Synchronize faction auction data"],
 						desc = L["Send and receive auction data for the current character's faction."],
 						get = function()
@@ -101,6 +107,8 @@ function addon:GetOptions()
 					oppositeFaction = {
 						order = 40,
 						type = "toggle",
+						width = "relative",
+						relWidth = 0.5,
 						name = L["Synchronize opposite-faction auction data"],
 						desc = L["Send and receive opposite-faction auction-house data without combining it with current-faction or neutral data."],
 						get = function()
@@ -113,6 +121,7 @@ function addon:GetOptions()
 					neutral = {
 						order = 50,
 						type = "toggle",
+						width = "full",
 						name = L["Synchronize neutral auction data"],
 						desc = L["Send and receive neutral auction-house data without combining it with faction data."],
 						get = function()
@@ -125,6 +134,8 @@ function addon:GetOptions()
 					formatLargeNumbers = {
 						order = 60,
 						type = "toggle",
+						width = "relative",
+						relWidth = 0.5,
 						name = L["Format large numbers"],
 						desc = L["Show large coin values with localized digit separators."],
 						get = function()
@@ -138,6 +149,8 @@ function addon:GetOptions()
 					includeBreakEvenDeals = {
 						order = 70,
 						type = "toggle",
+						width = "relative",
+						relWidth = 0.5,
 						name = L["Include break-even deals"],
 						desc = L["Include vendor, disenchanting, prospecting, and milling deals whose purchase price equals their expected return."],
 						get = function()
@@ -150,6 +163,8 @@ function addon:GetOptions()
 					total = {
 						order = 80,
 						type = "description",
+						width = "relative",
+						relWidth = 0.5,
 						name = function()
 							local tracker = addon:GetModule("VendorFlipTracking")
 							return format(L["Vendor flip profit: %s"], tracker:GetFormattedProfit())
@@ -158,6 +173,8 @@ function addon:GetOptions()
 					reset = {
 						order = 90,
 						type = "execute",
+						width = "relative",
+						relWidth = 0.5,
 						name = L["Reset vendor flip profit"],
 						confirm = L["Reset vendor flip profit and its outstanding item quantities?"],
 						func = function()
@@ -198,6 +215,8 @@ function addon:GetOptions()
 					trendDisplay = {
 						order = 50,
 						type = "select",
+						width = "relative",
+						relWidth = 0.34,
 						name = L["Trend display"],
 						values = {
 							percent = L["Percent"],
@@ -213,6 +232,7 @@ function addon:GetOptions()
 					values = {
 						order = 60,
 						type = "multiselect",
+						width = 1.1,
 						name = L["Tooltip values"],
 						values = {
 							["01-minBid"] = L["Minimum bid"],
@@ -253,6 +273,8 @@ function addon:GetOptions()
 					hide = {
 						order = 10,
 						type = "toggle",
+						width = "relative",
+						relWidth = 0.33,
 						name = HIDE,
 						desc = L["Hide the minimap button."],
 						get = function()
@@ -271,6 +293,8 @@ function addon:GetOptions()
 					lock = {
 						order = 20,
 						type = "toggle",
+						width = "relative",
+						relWidth = 0.33,
 						name = LOCK,
 						desc = L["Lock the minimap button and prevent dragging."],
 						get = function()
@@ -294,6 +318,8 @@ function addon:GetOptions()
 					lockOnDegree = {
 						order = 30,
 						type = "toggle",
+						width = "relative",
+						relWidth = 0.33,
 						name = L["Precise Lock"],
 						desc = L["When locked, snap the minimap button to an exact degree."],
 						get = function()
@@ -310,6 +336,8 @@ function addon:GetOptions()
 					addonCompartment = {
 						order = 40,
 						type = "toggle",
+						width = "relative",
+						relWidth = 0.33,
 						name = L["AddOn Compartment"],
 						desc = L["Show the minimap button in the addon compartment."],
 						hidden = function()
@@ -335,6 +363,8 @@ function addon:GetOptions()
 					minimapPos = {
 						order = 50,
 						type = "range",
+						width = "relative",
+						relWidth = 0.67,
 						name = L["Rotate Button"],
 						desc = L["Rotate the minimap button."],
 						disabled = function()

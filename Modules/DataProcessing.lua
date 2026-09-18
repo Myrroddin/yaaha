@@ -33,6 +33,8 @@ local SECONDS_PER_DAY = 24 * 60 * 60
 local MAX_HISTORY_DAYS = 60
 local ITEMS_PER_FRAME = 100
 local ITEM_DATA_TIMEOUT = 5
+local EARLY_OUTLIER_MIN_LISTINGS = 3
+local EARLY_OUTLIER_PRICE_MULTIPLIER = 10
 
 -- These are the published relative weights used by AuctionDB. For YAAHA's longer
 -- horizons, observations older than fourteen days remain at the final weight of
@@ -97,7 +99,7 @@ local worker, completed
 local totalItems = 0
 local processedItems = 0
 
-local function CalculateCurrentMarketValue(buyouts)
+local function CalculateCurrentMarketValue(buyouts, buyoutListings)
 	local prices = {}
 	local numPrices = 0
 	local numObservations = 0
@@ -125,13 +127,21 @@ local function CalculateCurrentMarketValue(buyouts)
 	local accepted = 0
 	local total = 0
 	local previousPrice
+	local cheaperListings = 0
 	for index = 1, numPrices do
 		local price = prices[index]
 		local firstPosition = accepted + 1
 		-- Do not consider a sudden 20% price jump after the cheapest 15% has already
 		-- been seen. This detects the boundary between the competitively priced group
 		-- and a much more expensive group before the later statistics are calculated.
-		if previousPrice and firstPosition > numObservations * 0.15 and price >= previousPrice * 1.20 then
+		local documentedOutlier = previousPrice and firstPosition > numObservations * 0.15
+			and price >= previousPrice * 1.20
+		-- A very large stack at an astronomical price can otherwise move the 15%
+		-- boundary past itself. Three genuinely separate cheaper listings establish a
+		-- lower-price cluster before this narrow safeguard rejects a tenfold jump.
+		local extremeEarlyOutlier = previousPrice and cheaperListings >= EARLY_OUTLIER_MIN_LISTINGS
+			and price >= previousPrice * EARLY_OUTLIER_PRICE_MULTIPLIER
+		if documentedOutlier or extremeEarlyOutlier then
 			break
 		end
 
@@ -143,6 +153,7 @@ local function CalculateCurrentMarketValue(buyouts)
 		accepted = accepted + count
 		total = total + price * count
 		previousPrice = price
+		cheaperListings = cheaperListings + (buyoutListings and buyoutListings[price] or 0)
 		if accepted == maxObservations then
 			break
 		end
@@ -280,7 +291,7 @@ local function ProcessItem(oldData, scanData, scanTime)
 	if scanData and scanData.buyouts then
 		-- Current market value belongs exclusively to this scan. Every completed value
 		-- enters history; the rolling calculations normalize market movement over time.
-		currentMarketValue = CalculateCurrentMarketValue(scanData.buyouts)
+		currentMarketValue = CalculateCurrentMarketValue(scanData.buyouts, scanData.buyoutListings)
 		if currentMarketValue then
 			history[#history + 1] = { timestamp = scanTime, value = currentMarketValue }
 		end

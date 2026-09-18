@@ -47,15 +47,13 @@ local currentCandidate, currentPage, currentRequest, nextResultIndex
 local pendingPurchase
 local queue, queueIndex
 local running, searchPending, transactionPending, waitingForItemInfo, waitingForResults
-local advanceAfterPurchaseRefresh, resumePage, transactionListUpdated, waitingForPurchaseRefresh
+local resumePage, transactionListUpdated, waitingForPurchaseRefresh
 local queryAttempts = 0
 local searchDeadline, transactionDeadline
 local statusElapsed = 0
 local highBidderNotices
 local wasScannerBusy
 local updateFrame = CreateFrame("Frame")
-
-local _, playerRealm = addon:GetPlayerIdentity()
 
 local function SetStatus(text)
 	if statusText then
@@ -104,7 +102,7 @@ local function ScheduleSearch()
 end
 
 local function ReadListing(index)
-	local _, _, count, _, _, _, _, minBid, minIncrement, buyout, bidAmount, highBidder, bidderFullName, owner, ownerFullName, _, itemID, hasAllInfo = GetAuctionItemInfo("list", index)
+	local name, _, count, _, _, _, _, minBid, minIncrement, buyout, bidAmount, highBidder, bidderFullName, owner, ownerFullName, _, itemID, hasAllInfo = GetAuctionItemInfo("list", index)
 	-- Classic may publish AUCTION_ITEM_LIST_UPDATE before every result has resolved
 	-- its item data. Advancing past such a row permanently skips a valid deal, so
 	-- distinguish "not loaded yet" from a genuinely unusable auction record.
@@ -121,6 +119,7 @@ local function ReadListing(index)
 	return {
 		index = index,
 		itemID = itemID,
+		name = name,
 		link = GetAuctionItemLink("list", index),
 		count = count,
 		minBid = minBid,
@@ -144,24 +143,8 @@ local function IsOwnHighBidder(listing)
 end
 
 local function MatchesRequest(listing, request)
-	if listing.itemID ~= request.itemID or listing.count ~= request.count then
-		return false
-	end
-	-- The payable bid is intentionally not compared with the cached value. Another
-	-- bidder may have raised it since the scan; live profitability is checked before
-	-- the popup and again when its Bid button is clicked.
-	if request.buyout and listing.buyout ~= request.buyout then
-		return false
-	end
-	if request.seller then
-		local listingSeller = listing.ownerFullName
-			or listing.owner and playerRealm and listing.owner .. "-" .. playerRealm
-			or listing.owner
-		if listingSeller ~= request.seller and listing.owner ~= request.seller then
-			return false
-		end
-	end
-	return not addon:IsPlayerAuction(listing.owner, listing.ownerFullName)
+	return listing.itemID == request.itemID
+		and not addon:IsPlayerAuction(listing.owner, listing.ownerFullName)
 end
 
 local function FinishSearch(message)
@@ -171,7 +154,6 @@ local function FinishSearch(message)
 	waitingForItemInfo = false
 	waitingForResults = false
 	resumePage = false
-	advanceAfterPurchaseRefresh = false
 	transactionListUpdated = false
 	waitingForPurchaseRefresh = false
 	queryAttempts = 0
@@ -206,24 +188,16 @@ local function ResolveTransaction(succeeded, confirmedFailure)
 		-- instead of issuing a fresh query and risking another throttle or timeout.
 		nextResultIndex = currentCandidate.index
 		currentCandidate = nil
-		currentRequest.remaining = currentRequest.remaining - 1
-		advanceAfterPurchaseRefresh = currentRequest.remaining <= 0
 		if transactionListUpdated then
 			transactionDeadline = nil
 			transactionListUpdated = false
-			if advanceAfterPurchaseRefresh then
-				advanceAfterPurchaseRefresh = false
-				AdvanceRequest()
-			else
-				resumePage = true
-			end
+			resumePage = true
 		else
 			waitingForPurchaseRefresh = true
 			transactionDeadline = GetTime() + TRANSACTION_TIMEOUT
 		end
 	else
 		transactionDeadline = nil
-		advanceAfterPurchaseRefresh = false
 		transactionListUpdated = false
 		waitingForPurchaseRefresh = false
 		if confirmedFailure and pendingPurchase then
@@ -246,17 +220,15 @@ function AdvanceRequest()
 	queueIndex = queueIndex + 1
 	while queue and queueIndex <= #queue do
 		local request = queue[queueIndex]
-		if request.remaining > 0 then
-			local name = GetItemInfo(request.itemID)
-			if name then
-				request.name = name
-				currentRequest = request
-				currentPage = 0
-				nextResultIndex = 1
-				queryAttempts = 0
-				ScheduleSearch()
-				return
-			end
+		local name = GetItemInfo(request.itemID)
+		if name then
+			request.name = name
+			currentRequest = request
+			currentPage = 0
+			nextResultIndex = 1
+			queryAttempts = 0
+			ScheduleSearch()
+			return
 		end
 		queueIndex = queueIndex + 1
 	end
@@ -266,10 +238,7 @@ end
 
 function ContinueAfterCandidate(requery)
 	currentCandidate = nil
-	currentRequest.remaining = currentRequest.remaining - 1
-	if currentRequest.remaining <= 0 then
-		AdvanceRequest()
-	elseif requery then
+	if requery then
 		currentPage = 0
 		nextResultIndex = 1
 		ScheduleSearch()
@@ -444,7 +413,6 @@ function module:ProcessCurrentPage()
 			return
 		end
 		if listing and MatchesRequest(listing, currentRequest) then
-			currentRequest.foundListing = true
 			nextResultIndex = index + 1
 			if ShowCandidate(listing) then
 				return
@@ -464,8 +432,23 @@ function module:ProcessCurrentPage()
 	end
 end
 
+local function ResultsMatchCurrentRequest()
+	local numResults = GetNumAuctionItems("list")
+	for index = 1, numResults do
+		local name, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hasAllInfo = GetAuctionItemInfo("list", index)
+		if hasAllInfo ~= false and name and name ~= currentRequest.name then
+			return false
+		end
+	end
+	return true
+end
+
 local function BuildQueue(vendorList, scope)
 	local requests = {}
+	local requestsByItem = {}
+	-- One exact-name query returns every live listing for an item. Keep only the
+	-- strongest cached profit for ordering; expanding every cached price/stack shape
+	-- into its own query needlessly multiplied throttle waits and repeated pages.
 	for itemID, vendorData in pairs(vendorList or {}) do
 		for _, auction in ipairs(vendorData.auctions) do
 			local vendorReturn = vendorData.vendorSell * auction.count
@@ -480,15 +463,20 @@ local function BuildQueue(vendorList, scope)
 				bestProfit = vendorReturn - buyout
 			end
 			if bestProfit then
-				requests[#requests + 1] = {
-					itemID = itemID,
-					count = auction.count,
-					bid = bid,
-					buyout = buyout,
-					vendorSell = vendorData.vendorSell,
-					remaining = auction.numAuctions or 1,
-					bestProfit = bestProfit,
-				}
+				local request = requestsByItem[itemID]
+				if request then
+					if bestProfit > request.bestProfit then
+						request.bestProfit = bestProfit
+					end
+				else
+					request = {
+						itemID = itemID,
+						vendorSell = vendorData.vendorSell,
+						bestProfit = bestProfit,
+					}
+					requestsByItem[itemID] = request
+					requests[#requests + 1] = request
+				end
 			end
 		end
 	end
@@ -498,16 +486,22 @@ local function BuildQueue(vendorList, scope)
 	-- current vendor cache. Records created before this tracking existed have no
 	-- action and are intentionally not guessed to be bids rather than buyouts.
 	for _, purchase in ipairs(saleCollector:GetPendingVendorBids(scope)) do
-		requests[#requests + 1] = {
-			itemID = purchase.itemID,
-			count = purchase.count,
-			buyout = purchase.buyout,
-			seller = purchase.seller,
-			vendorSell = purchase.vendorSell,
-			remaining = 1,
-			bestProfit = purchase.vendorSell and purchase.vendorSell * purchase.count - purchase.price or 0,
-			pendingPurchase = purchase,
-		}
+		local bestProfit = purchase.vendorSell and purchase.vendorSell * purchase.count - purchase.price or 0
+		local request = requestsByItem[purchase.itemID]
+		if request then
+			request.vendorSell = request.vendorSell or purchase.vendorSell
+			if bestProfit > request.bestProfit then
+				request.bestProfit = bestProfit
+			end
+		else
+			request = {
+				itemID = purchase.itemID,
+				vendorSell = purchase.vendorSell,
+				bestProfit = bestProfit,
+			}
+			requestsByItem[purchase.itemID] = request
+			requests[#requests + 1] = request
+		end
 	end
 
 	-- Showing the greatest possible profit first helps the player spend limited
@@ -558,7 +552,6 @@ local function StartVendorFlips()
 	currentRequest = nil
 	nextResultIndex = 1
 	resumePage = false
-	advanceAfterPurchaseRefresh = false
 	transactionListUpdated = false
 	searchPending = false
 	transactionPending = false
@@ -672,14 +665,9 @@ function module:OnEnable()
 			-- focused query rather than leaving the workflow stalled.
 			waitingForPurchaseRefresh = false
 			transactionDeadline = nil
-			if advanceAfterPurchaseRefresh then
-				advanceAfterPurchaseRefresh = false
-				AdvanceRequest()
-			else
-				currentPage = 0
-				nextResultIndex = 1
-				ScheduleSearch()
-			end
+			currentPage = 0
+			nextResultIndex = 1
+			ScheduleSearch()
 		elseif running and resumePage then
 			resumePage = false
 			self:ProcessCurrentPage()
@@ -754,20 +742,28 @@ function module:AUCTION_ITEM_LIST_UPDATE()
 	if running and transactionPending then
 		-- The list refresh can arrive before the chat confirmation. Remember it so
 		-- ResolveTransaction can continue immediately once success is confirmed.
-		transactionListUpdated = true
+		if ResultsMatchCurrentRequest() then
+			transactionListUpdated = true
+		end
 		return
 	elseif running and waitingForPurchaseRefresh then
+		if not ResultsMatchCurrentRequest() then
+			return
+		end
 		waitingForPurchaseRefresh = false
 		transactionDeadline = nil
-		if advanceAfterPurchaseRefresh then
-			advanceAfterPurchaseRefresh = false
-			AdvanceRequest()
-		else
-			self:ProcessCurrentPage()
-		end
+		self:ProcessCurrentPage()
 		return
 	end
 	if running and (waitingForResults or waitingForItemInfo) then
+		-- AUCTION_ITEM_LIST_UPDATE has no query identifier and can also be fired by
+		-- sorting or another addon's search. Do not consume a foreign result page as
+		-- the answer to YAAHA's current request; doing so used to skip valid items.
+		if waitingForResults and not ResultsMatchCurrentRequest() then
+			waitingForResults = false
+			ScheduleSearch()
+			return
+		end
 		local receivedNewPage = waitingForResults
 		waitingForResults = false
 		waitingForItemInfo = false

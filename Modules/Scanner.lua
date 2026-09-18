@@ -147,6 +147,16 @@ local function AddAuction(auctionDB, itemID, count, minBid, minIncrement, buyout
 			itemData.buyouts = buyouts
 		end
 		buyouts[unitBuyout] = (buyouts[unitBuyout] or 0) + count
+
+		-- Keep a second transient histogram by listing rather than quantity. Market
+		-- processing uses it only to confirm that several cheaper auctions establish
+		-- a price cluster before rejecting an extreme early jump.
+		local buyoutListings = itemData.buyoutListings
+		if not buyoutListings then
+			buyoutListings = {}
+			itemData.buyoutListings = buyoutListings
+		end
+		buyoutListings[unitBuyout] = (buyoutListings[unitBuyout] or 0) + 1
 	end
 
 	-- Vendor-flip candidates must retain listing-level stack and price combinations.

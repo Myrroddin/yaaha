@@ -1,4 +1,5 @@
 ## Interface: 38002, 20506, 11509
+## AllowLoadGameType: vanilla, tbc, wrath
 ## Title: YAAHA
 ## Notes: Yet Another Auction House Addon
 ## Notes-deDE: @localization(locale="deDE", key="Notes", namespace="ToC")@
@@ -77,6 +78,7 @@ Options.lua
 Data\ConvertData.lua
 Data\DisenchantingData.lua
 Data\DisenchantingCollector.lua
+Data\EnchantingCraftData.lua
 Data\EnchantingData.lua [AllowLoadGameType wrath]
 Modules\ProfessionScanner.lua
 Modules\DataProcessing.lua

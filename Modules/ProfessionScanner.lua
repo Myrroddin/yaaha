@@ -58,6 +58,7 @@ local TRANSMUTATION_MASTERY = 4
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("ProfessionScanner", "AceEvent-3.0")
 local convertData = addon:GetModule("ConvertData")
+local enchantingCraftData = addon:GetModule("EnchantingCraftData")
 -- The spell-to-scroll and vellum mapping is loaded only by Wrath-based clients.
 local enchantingData = addon:GetModule("EnchantingData", true)
 
@@ -76,8 +77,12 @@ local function GetSpellID(link)
 	return spellID and tonumber(spellID)
 end
 
-local function GetCraftOutputItemID(name, outputLink)
-	local itemID = addon:GetItemID(outputLink)
+local function GetCraftOutputItemID(name, outputLink, spellID)
+	local itemID = enchantingCraftData:GetCraftedItem(spellID)
+	if itemID then
+		return itemID
+	end
+	itemID = addon:GetItemID(outputLink)
 	if itemID then
 		return itemID
 	end
@@ -223,7 +228,10 @@ local function GetAlchemyMastery(outputItemID, altVerb)
 	end
 end
 
-local function GetMasteryYield(entry)
+local function GetMasteryYield(entry, allowMastery)
+	if not allowMastery then
+		return 1
+	end
 	if entry.skillLineID ~= ALCHEMY_SKILL_LINE then
 		return 1
 	end
@@ -241,7 +249,8 @@ local function ReadRecipe(index, name, isCraft, altVerb)
 	local recipeLink = isCraft and GetCraftRecipeLink(index) or GetTradeSkillRecipeLink(index)
 	local outputLink = isCraft and GetCraftItemLink(index) or GetTradeSkillItemLink(index)
 	local spellID = GetSpellID(recipeLink) or GetSpellID(outputLink)
-	local outputItemID = isCraft and GetCraftOutputItemID(name, outputLink) or addon:GetItemID(outputLink)
+	local outputItemID = isCraft and GetCraftOutputItemID(name, outputLink, spellID)
+		or addon:GetItemID(outputLink)
 	if isWrath and enchantingData and spellID and not outputItemID then
 		outputItemID = enchantingData:GetEnchant(spellID)
 	end
@@ -471,7 +480,7 @@ local function BuildRecipeIndex(currentCharacterOnly, outputItemID)
 	return recipesBySpell, recipesByOutput
 end
 
-local function Calculate(auctionDB, currentCharacterOnly, outputItemID)
+local function Calculate(auctionDB, currentCharacterOnly, outputItemID, allowMastery)
 	local recipesBySpell, recipesByOutput = BuildRecipeIndex(currentCharacterOnly, outputItemID)
 	local itemCache = {}
 	local recipeCache = {}
@@ -560,7 +569,11 @@ local function Calculate(auctionDB, currentCharacterOnly, outputItemID)
 		end)
 		visitingRecipes[entry] = nil
 		local outputQuantity = (entry.recipe.minMade + entry.recipe.maxMade) / 2
+		local masteryYield = GetMasteryYield(entry, allowMastery)
 		local result = {
+			-- Mastery affects the expected auction return from the finished recipe,
+			-- not its reagent requirements or its baseline crafting cost. Keep the
+			-- multiplier as metadata so callers can apply it only to that return.
 			value = total / outputQuantity,
 			totalReagentValue = total,
 			outputQuantity = outputQuantity,
@@ -569,7 +582,7 @@ local function Calculate(auctionDB, currentCharacterOnly, outputItemID)
 			skillLineID = entry.skillLineID,
 			specializationIndex = entry.specializationIndex,
 			alchemyMastery = entry.recipe.alchemyMastery,
-			masteryYield = GetMasteryYield(entry),
+			masteryYield = masteryYield,
 			stale = entry.stale,
 			spellID = entry.spellID,
 			outputItemID = entry.recipe.outputItemID,
@@ -664,8 +677,48 @@ function module:IsRecipeKnown(spellID, currentCharacterOnly)
 	return recipesBySpell[spellID] ~= nil
 end
 
-function module:GetItemCrafting(itemID, auctionDB, currentCharacterOnly)
-	local calculator = Calculate(auctionDB, currentCharacterOnly, itemID)
+local function GetKnownRecipeSpellID(name)
+	if not name then
+		return
+	end
+	local playerFullName = GetPlayerFullName()
+	if not playerFullName then
+		return
+	end
+	local professions = addon.db.factionrealm.knownProfessions[playerFullName]
+	if not professions then
+		return
+	end
+	for _, profession in pairs(professions) do
+		for recipeKey, recipe in pairs(profession.recipes or {}) do
+			if recipe.name == name then
+				return recipe.spellID or type(recipeKey) == "number" and recipeKey or nil
+			end
+		end
+	end
+end
+
+function module:GetCraftRecipeSpellID(index)
+	local spellID = GetSpellID(GetCraftRecipeLink(index))
+	if spellID then
+		return spellID
+	end
+	-- Classic's Craft frame can stop returning a recipe hyperlink after another
+	-- profession UI takes ownership of the frame. Its visible row name remains
+	-- available, so resolve that name against this character's scanned snapshot.
+	return GetKnownRecipeSpellID(GetCraftInfo(index))
+end
+
+function module:GetTradeSkillRecipeSpellID(index)
+	local spellID = GetSpellID(GetTradeSkillRecipeLink(index))
+	if spellID then
+		return spellID
+	end
+	return GetKnownRecipeSpellID(GetTradeSkillInfo(index))
+end
+
+function module:GetItemCrafting(itemID, auctionDB, currentCharacterOnly, allowMastery)
+	local calculator = Calculate(auctionDB, currentCharacterOnly, itemID, allowMastery)
 	local best
 	local recipes = calculator:GetRecipesForItem(itemID)
 	for index = 1, #recipes do
@@ -678,12 +731,12 @@ function module:GetItemCrafting(itemID, auctionDB, currentCharacterOnly)
 	return best
 end
 
-function module:GetRecipeCrafting(spellID, auctionDB, currentCharacterOnly)
-	return Calculate(auctionDB, currentCharacterOnly):GetRecipe(spellID)
+function module:GetRecipeCrafting(spellID, auctionDB, currentCharacterOnly, allowMastery)
+	return Calculate(auctionDB, currentCharacterOnly, nil, allowMastery):GetRecipe(spellID)
 end
 
-function module:GetMaterialCost(itemID, auctionDB, currentCharacterOnly)
-	return Calculate(auctionDB, currentCharacterOnly):GetItem(itemID)
+function module:GetMaterialCost(itemID, auctionDB, currentCharacterOnly, allowMastery)
+	return Calculate(auctionDB, currentCharacterOnly, nil, allowMastery):GetItem(itemID)
 end
 
 function module:TRADE_SKILL_SHOW()

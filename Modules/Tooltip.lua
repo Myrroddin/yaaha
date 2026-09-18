@@ -1,14 +1,18 @@
 local AUCTIONS = AUCTIONS
+local _G = _G
 local AUCTION_HOUSE_BROWSE_HEADER_QUANTITY = AUCTION_HOUSE_BROWSE_HEADER_QUANTITY
 local C_Container = C_Container
 local C_Item = C_Item
+local C_Timer = C_Timer
 local ceil = math.ceil
+local EmbeddedItemTooltip = EmbeddedItemTooltip
 local FACTION_NEUTRAL = FACTION_NEUTRAL
 local floor = math.floor
 local format = string.format
 local FormatLargeNumber = FormatLargeNumber
 local GameTooltip = GameTooltip
 local GetMouseFoci = GetMouseFoci
+local hooksecurefunc = hooksecurefunc
 local IsAltKeyDown = IsAltKeyDown
 local IsControlKeyDown = IsControlKeyDown
 local IsShiftKeyDown = IsShiftKeyDown
@@ -22,6 +26,7 @@ local SELL_PRICE = SELL_PRICE
 local setmetatable = setmetatable
 local ShoppingTooltip1 = ShoppingTooltip1
 local ShoppingTooltip2 = ShoppingTooltip2
+local ShoppingTooltip3 = ShoppingTooltip3
 local tostring = tostring
 local UnitFactionGroup = UnitFactionGroup
 
@@ -60,15 +65,22 @@ local saleFields = {
 	{ "realmAverageSaleValue", "Realm average sale value", "money", "18-realmAverageSaleValue" },
 }
 
-local tooltips = {
-	GameTooltip,
-	ItemRefTooltip,
-	ShoppingTooltip1,
-	ShoppingTooltip2,
-	ItemRefShoppingTooltip1,
-	ItemRefShoppingTooltip2,
-}
+local tooltips = {}
+local function AddTooltip(tooltip)
+	if tooltip then
+		tooltips[#tooltips + 1] = tooltip
+	end
+end
+AddTooltip(GameTooltip)
+AddTooltip(ItemRefTooltip)
+AddTooltip(EmbeddedItemTooltip)
+AddTooltip(ShoppingTooltip1)
+AddTooltip(ShoppingTooltip2)
+AddTooltip(ShoppingTooltip3)
+AddTooltip(ItemRefShoppingTooltip1)
+AddTooltip(ItemRefShoppingTooltip2)
 local tooltipState = setmetatable({}, { __mode = "k" })
+local tooltipDisplayState = setmetatable({}, { __mode = "k" })
 local GREEN_NUMBER = "|cff20ff20"
 local RED_NUMBER = "|cffff2020"
 local CRAFT_SALE_VALUE_FIELDS = {
@@ -158,6 +170,37 @@ local function GetItemID(tooltip)
 	return addon:GetItemID(link), link
 end
 
+local function HasRenderedYAAHAData(tooltip)
+	local name = tooltip:GetName()
+	if not name then
+		return false
+	end
+	for index = 1, tooltip:NumLines() do
+		local line = _G[name .. "TextLeft" .. index]
+		if line and line:GetText() == "YAAHA" then
+			return true
+		end
+	end
+	return false
+end
+
+local function IsSameDisplay(tooltip, kind, id)
+	local state = tooltipDisplayState[tooltip]
+	return state and state.kind == kind and state.id == id
+		and state.alt == IsAltKeyDown() and state.control == IsControlKeyDown()
+		and state.shift == IsShiftKeyDown()
+end
+
+local function RememberDisplay(tooltip, kind, id)
+	tooltipDisplayState[tooltip] = {
+		kind = kind,
+		id = id,
+		alt = IsAltKeyDown(),
+		control = IsControlKeyDown(),
+		shift = IsShiftKeyDown(),
+	}
+end
+
 local function HasAuctionData(scopeDB)
 	return scopeDB and scopeDB.auctionDB and next(scopeDB.auctionDB) ~= nil
 end
@@ -189,13 +232,13 @@ local function AddCraftingLines(AddLine, result, showBreakdown, multiplier)
 	if not result or not showBreakdown then
 		return
 	end
-	local scale = multiplier / result.outputQuantity
+	local quantityScale = multiplier / result.outputQuantity
 	for index = 1, #result.materials do
 		local material = result.materials[index]
 		local name, link = C_Item.GetItemInfo(material.itemID)
 		local label = format(L["%s x%s"], link or name or tostring(material.itemID),
-			FormatExpectedQuantity(material.quantity * scale))
-		AddLine(L["Crafting"], label, addon:FormatMoney(ceil(material.totalValue * scale)))
+			FormatExpectedQuantity(material.quantity * quantityScale))
+		AddLine(L["Crafting"], label, addon:FormatMoney(ceil(material.totalValue * quantityScale)))
 		if material.source == "convert" and material.detail then
 			local convertedName, convertedLink = C_Item.GetItemInfo(material.detail.itemID)
 			local sourceQuantity = material.detail.quantity < 1 and 1 or material.detail.quantity
@@ -220,7 +263,7 @@ local function GetCraftSaleValue(data)
 	end
 end
 
-local function FormatCraftingValue(result, multiplier, auctionData, auctionCut, allowMastery)
+local function FormatCraftingValue(result, multiplier, auctionData, auctionCut)
 	if not result then
 		return "--"
 	end
@@ -228,13 +271,9 @@ local function FormatCraftingValue(result, multiplier, auctionData, auctionCut, 
 	local value = addon:FormatMoney(craftingValue)
 	local saleValue = GetCraftSaleValue(auctionData)
 	if saleValue then
-		local expectedReturn = saleValue * auctionCut * multiplier
-		-- Mastery belongs to a crafter in the player's factionrealm. Modifier views
-		-- compare other auction houses, where that character cannot necessarily sell;
-		-- those views therefore use the recipe's baseline output.
-		if allowMastery then
-			expectedReturn = expectedReturn * result.masteryYield
-		end
+		-- A matching Alchemy mastery increases expected saleable output without
+		-- changing the recipe's crafting cost or the cost of any reagent it makes.
+		local expectedReturn = saleValue * auctionCut * multiplier * result.masteryYield
 		local profit = expectedReturn - craftingValue
 		local color = profit > 0 and GREEN_NUMBER or profit < 0 and RED_NUMBER
 		value = format(L["%s (%s)"], value, addon:FormatMoney(profit, true, color))
@@ -242,13 +281,15 @@ local function FormatCraftingValue(result, multiplier, auctionData, auctionCut, 
 	return result.stale and format(L["%s (stale)"], value) or value
 end
 
-function module:AddItemData(tooltip, itemID, scope)
+function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 	local activeScope, scopeDB, scopeName = GetContext(scope)
 	local data = scopeDB.auctionDB[itemID]
 	local priceScope = activeScope == "realm" and "realm" or "factionrealm"
 	local disenchant = disenchantingData:GetValue(itemID, priceScope, scopeDB.auctionDB)
 	local inventoryBuy = inventoryAverageBuy:GetValue(itemID)
-	local factionCrafting = professionScanner:GetItemCrafting(itemID, scopeDB.auctionDB, false)
+	local allowMastery = activeScope == "factionrealm"
+	local factionCrafting = professionScanner:GetItemCrafting(
+		itemID, scopeDB.auctionDB, false, allowMastery)
 	local knownCraft = professionScanner:IsItemKnown(itemID, false)
 	local personalSaleRate = saleCollector:GetPersonalSaleData(itemID, priceScope, scopeDB)
 	local realmSaleRate, realmSoldPerDay, realmAverageSaleValue = saleCollector:GetRealmSaleData(
@@ -264,7 +305,6 @@ function module:AddItemData(tooltip, itemID, scope)
 	local settings = addon.db.profile.tooltip
 	local multiplier = GetCursorStackCount(itemID)
 	local auctionCut = activeScope == "realm" and 0.85 or 0.95
-	local allowMastery = activeScope == "factionrealm"
 	local activeSection, addedHeader
 	local function EnsureHeader()
 		if not addedHeader then
@@ -335,7 +375,7 @@ function module:AddItemData(tooltip, itemID, scope)
 	end
 	if settings["19-craftingValue"] and knownCraft then
 		AddLine(L["Crafting"], L["Crafting cost"],
-			FormatCraftingValue(factionCrafting, multiplier, data, auctionCut, allowMastery))
+			FormatCraftingValue(factionCrafting, multiplier, data, auctionCut))
 	end
 	AddCraftingLines(AddLine, factionCrafting, settings["20-craftingResults"], multiplier)
 
@@ -358,23 +398,26 @@ function module:AddItemData(tooltip, itemID, scope)
 			disenchant.expectedValue and addon:FormatMoney(disenchant.expectedValue, true) or "--")
 	end
 
-	if addedHeader then
+	if addedHeader and not suppressRefresh then
 		tooltip:Show()
 	end
 end
 
-function module:AddRecipeData(tooltip, spellID, scope)
+function module:AddRecipeData(tooltip, spellID, scope, reuseHeader, suppressRefresh)
 	local activeScope, scopeDB, scopeName = GetContext(scope)
 	if not professionScanner:IsRecipeKnown(spellID, false) then
 		return
 	end
-	local factionCrafting = professionScanner:GetRecipeCrafting(spellID, scopeDB.auctionDB, false)
+	local allowMastery = activeScope == "factionrealm"
+	local factionCrafting = professionScanner:GetRecipeCrafting(
+		spellID, scopeDB.auctionDB, false, allowMastery)
 	local settings = addon.db.profile.tooltip
 	if not settings["19-craftingValue"] and not settings["20-craftingResults"] then
 		return
 	end
 
-	local activeSection, addedHeader
+	local activeSection
+	local addedHeader = reuseHeader
 	local function AddLine(section, label, value)
 		if not addedHeader then
 			tooltip:AddLine(" ")
@@ -390,15 +433,14 @@ function module:AddRecipeData(tooltip, spellID, scope)
 	end
 
 	if settings["19-craftingValue"] then
-		local allowMastery = activeScope == "factionrealm"
 		AddLine(L["Crafting"], L["Crafting cost"],
 			FormatCraftingValue(factionCrafting, 1,
 				factionCrafting and factionCrafting.outputItemID
 					and scopeDB.auctionDB[factionCrafting.outputItemID],
-				activeScope == "realm" and 0.85 or 0.95, allowMastery))
+				activeScope == "realm" and 0.85 or 0.95))
 	end
 	AddCraftingLines(AddLine, factionCrafting, settings["20-craftingResults"], 1)
-	if addedHeader then
+	if addedHeader and not suppressRefresh then
 		tooltip:Show()
 	end
 end
@@ -416,40 +458,137 @@ function module:ShowTooltip(owner, link, itemID, scope)
 	GameTooltip:Show()
 end
 
-local function OnTooltipSetItem(tooltip)
-	local itemID, link = GetItemID(tooltip)
+local function QueueItemData(tooltip, itemID, link, immediate)
 	local state = tooltipState[tooltip]
-	if not itemID or state and state.link == link then
+	if not itemID or state and state.itemID == itemID and HasRenderedYAAHAData(tooltip) then
+		return
+	end
+	if state and state.itemID == itemID and state.pending and not immediate then
 		return
 	end
 
-	tooltipState[tooltip] = { itemID = itemID, link = link }
-	module:AddItemData(tooltip, itemID)
+	state = { itemID = itemID, link = link, pending = not immediate }
+	tooltipState[tooltip] = state
+	local sameDisplay = IsSameDisplay(tooltip, "item", itemID)
+	if immediate or sameDisplay then
+		module:AddItemData(tooltip, itemID, nil, sameDisplay)
+		RememberDisplay(tooltip, "item", itemID)
+		return
+	end
+
+	-- Profession tooltips can briefly identify one of a recipe's reagents as the
+	-- displayed item before their craft callback supplies the real spell. Waiting
+	-- until the current render finishes lets that callback replace this state and
+	-- prevents both the false item section and a duplicate recipe section.
+	C_Timer.After(0, function()
+		if tooltipState[tooltip] ~= state or not tooltip:IsShown()
+			or HasRenderedYAAHAData(tooltip) then
+			return
+		end
+		state.pending = nil
+		module:AddItemData(tooltip, itemID)
+		RememberDisplay(tooltip, "item", itemID)
+	end)
+end
+
+local function OnTooltipSetItem(tooltip)
+	local itemID, link = GetItemID(tooltip)
+	QueueItemData(tooltip, itemID, link)
+end
+
+local function OnTooltipSetHyperlink(tooltip, link)
+	local itemID = addon:GetItemID(link)
+	-- ItemRefTooltip is dedicated to clicked chat links, so unlike GameTooltip it
+	-- cannot be a transient reagent emitted while a profession recipe is rendered.
+	QueueItemData(tooltip, itemID, link, tooltip == ItemRefTooltip)
 end
 
 local function OnTooltipSetSpell(tooltip)
 	local _, spellID = tooltip:GetSpell()
 	local state = tooltipState[tooltip]
-	if not spellID or state and state.spellID == spellID then
+	if not spellID or state and state.spellID == spellID and HasRenderedYAAHAData(tooltip) then
 		return
 	end
+	local sameDisplay = IsSameDisplay(tooltip, "recipe", spellID)
 	tooltipState[tooltip] = { spellID = spellID }
-	module:AddRecipeData(tooltip, spellID)
+	module:AddRecipeData(tooltip, spellID, nil, false, sameDisplay)
+	RememberDisplay(tooltip, "recipe", spellID)
+end
+
+local function AddDisplayedRecipeData(tooltip, spellID)
+	local state = tooltipState[tooltip]
+	local hasRenderedData = HasRenderedYAAHAData(tooltip)
+	if not spellID or state and state.spellID == spellID and hasRenderedData then
+		return
+	end
+	-- Replace rather than mutate a pending item state. Its deferred callback uses
+	-- table identity to recognize that this recipe superseded the transient item.
+	local sameDisplay = IsSameDisplay(tooltip, "recipe", spellID)
+	tooltipState[tooltip] = { spellID = spellID }
+	module:AddRecipeData(tooltip, spellID, nil, hasRenderedData, sameDisplay)
+	RememberDisplay(tooltip, "recipe", spellID)
+end
+
+local function OnTooltipSetCraftItem(tooltip, recipeIndex, reagentIndex)
+	if reagentIndex then
+		return
+	end
+
+	-- Classic Enchanting can describe an item-producing recipe with an enchant
+	-- hyperlink. In that case neither the ordinary item nor spell tooltip scripts
+	-- provide YAAHA with an identity, but SetCraftItem still supplies the recipe row.
+	AddDisplayedRecipeData(tooltip, professionScanner:GetCraftRecipeSpellID(recipeIndex))
+end
+
+local function OnTooltipSetCraftSpell(tooltip, recipeIndex)
+	-- Classic's Enchanting UI and replacement profession UIs use the Craft-frame
+	-- row index here rather than the recipe's spell ID.
+	AddDisplayedRecipeData(tooltip, professionScanner:GetCraftRecipeSpellID(recipeIndex))
+end
+
+local function OnTooltipSetTradeSkillItem(tooltip, recipeIndex, reagentIndex)
+	if reagentIndex then
+		return
+	end
+	AddDisplayedRecipeData(tooltip, professionScanner:GetTradeSkillRecipeSpellID(recipeIndex))
 end
 
 local function OnTooltipCleared(tooltip)
 	tooltipState[tooltip] = nil
 end
 
+local function OnTooltipHidden(tooltip)
+	tooltipState[tooltip] = nil
+	tooltipDisplayState[tooltip] = nil
+end
+
 function module:OnEnable()
 	for index = 1, #tooltips do
 		local tooltip = tooltips[index]
 		if tooltip then
-			tooltip:HookScript("OnTooltipSetItem", OnTooltipSetItem)
+			if tooltip:HasScript("OnTooltipSetItem") then
+				tooltip:HookScript("OnTooltipSetItem", OnTooltipSetItem)
+			end
+			if tooltip.SetHyperlink then
+				hooksecurefunc(tooltip, "SetHyperlink", OnTooltipSetHyperlink)
+			end
 			if tooltip:HasScript("OnTooltipSetSpell") then
 				tooltip:HookScript("OnTooltipSetSpell", OnTooltipSetSpell)
 			end
 			tooltip:HookScript("OnTooltipCleared", OnTooltipCleared)
+			-- Some replacement profession UIs hide and rebuild GameTooltip without
+			-- invoking the clearing sequence above. Forget the deduplication state so
+			-- the same recipe receives YAAHA's lines the next time it is displayed.
+			tooltip:HookScript("OnHide", OnTooltipHidden)
 		end
+	end
+	if GameTooltip.SetCraftItem then
+		hooksecurefunc(GameTooltip, "SetCraftItem", OnTooltipSetCraftItem)
+	end
+	if GameTooltip.SetCraftSpell then
+		hooksecurefunc(GameTooltip, "SetCraftSpell", OnTooltipSetCraftSpell)
+	end
+	if GameTooltip.SetTradeSkillItem then
+		hooksecurefunc(GameTooltip, "SetTradeSkillItem", OnTooltipSetTradeSkillItem)
 	end
 end

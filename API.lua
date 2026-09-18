@@ -27,6 +27,8 @@ local API_VERSION = 1
 ---@field lastScan? integer Server timestamp of the current item snapshot.
 ---@field minBid? integer Lowest payable per-unit bid in copper.
 ---@field minBuyout? integer Lowest per-unit buyout in copper.
+---@field firstNonZeroMarketValue? integer First positive market value in copper, from the shortest available time frame.
+---@field firstNonZeroMarketSource? YAAHA_API.MarketValueSource Field which supplied `firstNonZeroMarketValue`.
 ---@field currentMarketValue? integer Current-scan market value in copper.
 ---@field midweekMarketValue? integer Weighted rolling three-day market value in copper.
 ---@field weeklyMarketValue? integer Weighted rolling seven-day market value in copper.
@@ -48,7 +50,7 @@ local API_VERSION = 1
 
 ---@class YAAHA_API.DisenchantResults
 ---@field requiredSkill integer Required Enchanting skill.
----@field sampleCount integer Number of learned Wrath observations used.
+---@field sampleCount integer Number of player-observed disenchantments contributing to this result range.
 ---@field results YAAHA_API.DisenchantMaterial[] Possible material results.
 
 ---@class YAAHA_API.PricedDisenchantMaterial: YAAHA_API.DisenchantMaterial
@@ -60,7 +62,7 @@ local API_VERSION = 1
 ---@class YAAHA_API.PricedDisenchantResults
 ---@field expectedValue? integer Complete expected disenchant value in copper.
 ---@field requiredSkill integer Required Enchanting skill.
----@field sampleCount integer Number of learned Wrath observations used.
+---@field sampleCount integer Number of player-observed disenchantments contributing to this result range.
 ---@field results YAAHA_API.PricedDisenchantMaterial[] Priced material results.
 
 ---@alias YAAHA_API.MaterialValueSource "market"|"vendor"|"convert"|"crafting"
@@ -83,6 +85,7 @@ local API_VERSION = 1
 ---@field value integer Per-unit crafting value in copper.
 ---@field totalReagentValue integer Reagent value for one recipe cast in copper.
 ---@field outputQuantity number Average number of items produced per cast.
+---@field masteryYield number Expected finished-item auction-return multiplier from a matching Alchemy mastery; otherwise `1`. This does not reduce crafting or material costs.
 ---@field character string Character whose known recipe was used.
 ---@field profession string Localized profession name.
 ---@field stale boolean Whether the character's profession snapshot predates the current game-client build.
@@ -104,6 +107,7 @@ local API_VERSION = 1
 ---@field GetAuctionQuantity fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
 ---@field GetMinBid fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
 ---@field GetMinBuyout fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
+---@field GetFirstNonZeroMarketValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?, YAAHA_API.MarketValueSource?
 ---@field GetCurrentMarketValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
 ---@field GetMidweekMarketValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
 ---@field GetWeeklyMarketValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
@@ -257,6 +261,9 @@ function API.GetItemData(itemID, auctionHouseType)
 		local field = copperFields[index]
 		data[field] = NormalizeCopper(source[field])
 	end
+	-- This convenience pair follows the same shortest-to-longest fallback used by
+	-- YAAHA's internal valuations. Literal minimum bid and buyout are not market values.
+	data.firstNonZeroMarketValue, data.firstNonZeroMarketSource = addon:GetFirstMarketValue(data)
 	if type(source.auctionQuantity) == "number" and source.auctionQuantity > 0 then
 		data.auctionQuantity = NormalizeQuantity(source.auctionQuantity)
 	end
@@ -296,6 +303,17 @@ end
 ---@return integer? minBuyout
 function API.GetMinBuyout(itemID, auctionHouseType)
 	return GetItemValue(itemID, auctionHouseType, "minBuyout")
+end
+
+---@param itemID integer
+---@param auctionHouseType? YAAHA_API.AuctionHouseType
+---@return integer? firstNonZeroMarketValue
+---@return YAAHA_API.MarketValueSource? firstNonZeroMarketSource
+function API.GetFirstNonZeroMarketValue(itemID, auctionHouseType)
+	local data = API.GetItemData(itemID, auctionHouseType)
+	if data then
+		return data.firstNonZeroMarketValue, data.firstNonZeroMarketSource
+	end
 end
 
 ---@param itemID integer
@@ -498,6 +516,7 @@ function CopyCraftingResult(source)
 		value = NormalizeRequiredCopper(source.value),
 		totalReagentValue = NormalizeRequiredCopper(source.totalReagentValue),
 		outputQuantity = source.outputQuantity,
+		masteryYield = source.masteryYield,
 		character = source.character,
 		profession = source.profession,
 		stale = source.stale,
@@ -547,7 +566,9 @@ function API.GetCraftingValue(itemID, auctionHouseType, fullResults, currentChar
 		return
 	end
 	local auctionDB = GetAuctionDB(auctionHouseType)
-	local result = auctionDB and professionScanner:GetItemCrafting(itemID, auctionDB, currentCharacterOnly)
+	local allowMastery = GetAuctionScope(auctionHouseType) == "factionrealm"
+	local result = auctionDB and professionScanner:GetItemCrafting(
+		itemID, auctionDB, currentCharacterOnly, allowMastery)
 	return fullResults and CopyCraftingResult(result) or result and NormalizeRequiredCopper(result.value)
 end
 
@@ -563,6 +584,8 @@ function API.GetRecipeCraftingValue(spellID, auctionHouseType, fullResults, curr
 		return
 	end
 	local auctionDB = GetAuctionDB(auctionHouseType)
-	local result = auctionDB and professionScanner:GetRecipeCrafting(spellID, auctionDB, currentCharacterOnly)
+	local allowMastery = GetAuctionScope(auctionHouseType) == "factionrealm"
+	local result = auctionDB and professionScanner:GetRecipeCrafting(
+		spellID, auctionDB, currentCharacterOnly, allowMastery)
 	return fullResults and CopyCraftingResult(result) or result and NormalizeRequiredCopper(result.value)
 end

@@ -11,7 +11,7 @@ YAAHA (Yet Another Auction House AddOn) helps players understand prices, find wo
 - The Burning Crusade Classic
 - Wrath of the Lich King Classic (Titan Reforged)
 
-Mists of Pandaria Classic and modern World of Warcraft are not currently supported.
+WoW Forever, Mists of Pandaria Classic, and modern World of Warcraft are not currently supported.
 
 ## Current features
 
@@ -57,7 +57,9 @@ YAAHA does not assume that every required material can be bought for the single 
 
 For example, if two Peacebloom are listed for 15 silver and 55 silver, buying both costs 70 silver, or an average of 35 silver each. A calculation based only on the minimum buyout would incorrectly value each Peacebloom at 15 silver, making the finished item look more profitable than it really is.
 
-YAAHA instead uses its market values and considers less expensive ways to obtain each material, such as crafting, conversion, or an unlimited-supply vendor. For readers interested in how auction listings can be turned into a more representative market value, TradeSkillMaster provides a helpful [plain-language explanation of market-value calculation](https://support.tradeskillmaster.com/custom-strings/how-is-auctiondb-market-value-calculated?).
+YAAHA instead uses its market values and considers less expensive ways to obtain each material, such as crafting, conversion, or an unlimited-supply vendor. In Burning Crusade and Wrath/Titan, YAAHA also recognizes Potion, Elixir, and Transmutation masteries when estimating the auction return and profit of applicable Alchemy recipes. Mastery does not reduce their crafting or material costs.
+
+For readers interested in how auction listings can be turned into a more representative market value, TradeSkillMaster provides a helpful [plain-language explanation of market-value calculation](https://support.tradeskillmaster.com/custom-strings/how-is-auctiondb-market-value-calculated?).
 
 ### Synchronization
 

@@ -55,7 +55,7 @@ The global and its annotation namespace are both named `YAAHA_API`. Consumers no
 if YAAHA_API then
     local data = YAAHA_API.GetItemData(2589, "Alliance")
     if data then
-        print(data.currentMarketValue)
+        print(data.firstNonZeroMarketValue, data.firstNonZeroMarketSource)
     end
 end
 ```
@@ -99,7 +99,7 @@ Returns YAAHA's public calculated data for one item in the requested auction hou
 ```lua
 local data = YAAHA_API.GetItemData(2589)
 if data then
-    print(data.currentMarketValue)
+    print(data.firstNonZeroMarketValue, data.firstNonZeroMarketSource)
 end
 ```
 
@@ -123,6 +123,8 @@ Returns `nil` if the request is invalid or YAAHA has no public data for the item
 | `lastScan` | `number` | Server timestamp of the current item snapshot. Omitted when the item was absent from the latest scan. |
 | `minBid` | `number` | Lowest payable per-unit bid in copper from the current scan. |
 | `minBuyout` | `number` | Lowest per-unit buyout in copper from the current scan. |
+| `firstNonZeroMarketValue` | `number` | First positive market value in copper, checking the available time frames from shortest to longest. |
+| `firstNonZeroMarketSource` | `string` | Key which supplied `firstNonZeroMarketValue`, such as `"currentMarketValue"` or `"midweekMarketValue"`. |
 | `currentMarketValue` | `number` | Market value calculated solely from the current scan. |
 | `midweekMarketValue` | `number` | Weighted rolling three-day market value. |
 | `weeklyMarketValue` | `number` | Weighted rolling seven-day market value. |
@@ -132,9 +134,11 @@ Returns `nil` if the request is invalid or YAAHA has no public data for the item
 
 Every key is optional. Unknown, expired, and inapplicable values are omitted.
 
+`firstNonZeroMarketValue` checks `currentMarketValue`, `midweekMarketValue`, `weeklyMarketValue`, `biweeklyMarketValue`, `monthlyMarketValue`, and `bimonthlyMarketValue` in that order. `minBid` and `minBuyout` are literal prices and are never considered market-value sources.
+
 ### Item-data wrappers
 
-The following functions accept the same `(itemID, auctionHouseType)` arguments as `GetItemData()` and return only the named value, or `nil` when it is unavailable:
+The following functions accept the same `(itemID, auctionHouseType)` arguments as `GetItemData()` and return only the named value or values. Unavailable values are `nil`:
 
 | Function | Returned key |
 | --- | --- |
@@ -142,6 +146,7 @@ The following functions accept the same `(itemID, auctionHouseType)` arguments a
 | `GetAuctionQuantity()` | `auctionQuantity` |
 | `GetMinBid()` | `minBid` |
 | `GetMinBuyout()` | `minBuyout` |
+| `GetFirstNonZeroMarketValue()` | `firstNonZeroMarketValue`, `firstNonZeroMarketSource` |
 | `GetCurrentMarketValue()` | `currentMarketValue` |
 | `GetMidweekMarketValue()` | `midweekMarketValue` |
 | `GetWeeklyMarketValue()` | `weeklyMarketValue` |
@@ -149,6 +154,14 @@ The following functions accept the same `(itemID, auctionHouseType)` arguments a
 | `GetMonthlyMarketValue()` | `monthlyMarketValue` |
 | `GetBimonthlyMarketValue()` | `bimonthlyMarketValue` |
 | `GetLastScanTime()` | `lastScan` |
+
+`GetFirstNonZeroMarketValue()` is the only wrapper in this group with two returns:
+
+```lua
+local firstNonZeroMarketValue, firstNonZeroMarketSource = YAAHA_API.GetFirstNonZeroMarketValue(2589)
+```
+
+It returns the selected copper value and its source key, or `nil, nil` when no positive market value is available.
 
 ### `GetAuctionHouseStats(auctionHouseType)`
 
@@ -206,10 +219,12 @@ Disenchanting results are universal and are not separated by auction-house type.
 | Function | Return type | Description |
 | --- | --- | --- |
 | `IsDisenchantable(itemID)` | `boolean` | Whether YAAHA recognizes the item as disenchantable and has a result range for it. |
-| `GetDisenchantResults(itemID)` | `table` or `nil` | A defensive copy of the item's possible materials, probabilities, quantity ranges, expected quantities, required skill, and Wrath sample count. |
+| `GetDisenchantResults(itemID)` | `table` or `nil` | A defensive copy of the item's possible materials, probabilities, quantity ranges, expected quantities, required skill, and learned sample count. |
 | `GetDisenchantValue(itemID, auctionHouseType, fullResults)` | `number`, `table`, or `nil` | Expected value using prices from the selected auction house. Pass `true` for the complete priced breakdown. Missing prices make the total unavailable. |
 
 `GetDisenchantResults()` returns `YAAHA_API.DisenchantResults`. Each `YAAHA_API.DisenchantMaterial` entry in its `results` array contains `itemID`, `chance`, `minQuantity`, `maxQuantity`, and `expectedQuantity`. `chance` is a decimal fraction. `expectedQuantity` already includes the probability of receiving that material.
+
+`sampleCount` is the number of disenchantments YAAHA has personally observed for that item category and level range. These learned observations supplement YAAHA's built-in probabilities on every supported game client. A value of `0` means the result still relies entirely on the built-in dataset; a larger value means player-observed results have increasingly contributed to the estimate.
 
 For each material, expected value uses the first positive source in this order: `currentMarketValue`, `midweekMarketValue`, `weeklyMarketValue`, `biweeklyMarketValue`, `monthlyMarketValue`, then `bimonthlyMarketValue`. Minimum bid and minimum buyout are never used as substitutes.
 
@@ -293,6 +308,8 @@ end
 
 For every reagent, YAAHA independently considers its first positive market value, unlimited-vendor price, conversion value, and recursively calculated crafting value. The least expensive available source is used. Conversion values use the converted source material's market value; they do not recursively reuse its vendor or crafting value.
 
+In Burning Crusade and Wrath/Titan, a recipe covered by the recorded alchemist's Potion, Elixir, or Transmutation mastery has an expected finished-item auction-return multiplier of `1.2`. Mastery does not change the recipe's required reagents, its crafting cost, or the cost of that item when it is used as a reagent in another recipe. It applies only when estimating the matching finished recipe's return on the current faction's auction house; Neutral and opposite-faction requests use the baseline return.
+
 In Wrath/Titan, an equipment-enchant result represents its auctionable scroll. Its crafting value includes the cheapest compatible armor or weapon vellum available through the same material-cost calculation. Classic Era and Burning Crusade equipment enchants retain their reagent cost but have no auctionable output item.
 
 Profession snapshots from an earlier game-client build are marked as stale. YAAHA prefers a current-build copy of a recipe whenever one is available, but retains a stale recipe as a fallback until that character opens the profession and refreshes it. Full crafting results expose this state to consumers.
@@ -306,6 +323,7 @@ When `fullResults` is true, the returned `YAAHA_API.CraftingResult` is a defensi
 | `value` | `number` | Per-unit crafting value in copper. |
 | `totalReagentValue` | `number` | Total reagent value for one recipe cast. |
 | `outputQuantity` | `number` | Fixed output or average of the minimum and maximum output. |
+| `masteryYield` | `number` | Expected finished-item auction-return multiplier; `1` normally or `1.2` for a matching Alchemy mastery. It does not reduce crafting or material costs. |
 | `character` | `string` | Character whose known recipe supplied the result. |
 | `profession` | `string` | Localized profession name. |
 | `stale` | `boolean` | Whether the profession snapshot predates the current game-client build. |

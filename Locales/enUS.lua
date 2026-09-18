@@ -1,5 +1,6 @@
 local debug = false
---@debug@ debug = true
+--@debug@
+debug = true
 --@end-debug@
 local L = LibStub("AceLocale-3.0"):NewLocale("YAAHA", "enUS", true, debug)
 

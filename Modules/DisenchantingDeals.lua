@@ -41,7 +41,7 @@ local actionButton, statusText
 local currentCandidate, currentPage, currentRequest, nextResultIndex
 local pendingPurchase
 local queue, queueIndex
-local advanceAfterPurchaseRefresh, resumePage, running, searchPending, transactionListUpdated, transactionPending
+local resumePage, running, searchPending, transactionListUpdated, transactionPending
 local waitingForItemInfo, waitingForPurchaseRefresh, waitingForResults
 local queryAttempts = 0
 local searchDeadline, transactionDeadline
@@ -91,7 +91,7 @@ local function ScheduleSearch()
 end
 
 local function ReadListing(index)
-	local _, _, count, _, _, _, _, _, _, buyout, _, _, _, owner, ownerFullName, _, itemID, hasAllInfo = GetAuctionItemInfo("list", index)
+	local name, _, count, _, _, _, _, _, _, buyout, _, _, _, owner, ownerFullName, _, itemID, hasAllInfo = GetAuctionItemInfo("list", index)
 	if hasAllInfo == false then
 		return nil, true
 	end
@@ -101,6 +101,7 @@ local function ReadListing(index)
 	return {
 		index = index,
 		itemID = itemID,
+		name = name,
 		link = GetAuctionItemLink("list", index),
 		count = count,
 		buyout = buyout,
@@ -110,8 +111,7 @@ local function ReadListing(index)
 end
 
 local function MatchesRequest(listing, request)
-	return listing.itemID == request.itemID and listing.count == request.count
-		and listing.buyout == request.buyout
+	return listing.itemID == request.itemID
 		and not addon:IsPlayerAuction(listing.owner, listing.ownerFullName)
 end
 
@@ -122,7 +122,6 @@ local function FinishSearch(message)
 	waitingForItemInfo = false
 	waitingForResults = false
 	resumePage = false
-	advanceAfterPurchaseRefresh = false
 	transactionListUpdated = false
 	waitingForPurchaseRefresh = false
 	queryAttempts = 0
@@ -144,17 +143,15 @@ local function AdvanceRequest()
 	queueIndex = queueIndex + 1
 	while queue and queueIndex <= #queue do
 		local request = queue[queueIndex]
-		if request.remaining > 0 then
-			local name = C_Item.GetItemInfo(request.itemID)
-			if name then
-				request.name = name
-				currentRequest = request
-				currentPage = 0
-				nextResultIndex = 1
-				queryAttempts = 0
-				ScheduleSearch()
-				return
-			end
+		local name = C_Item.GetItemInfo(request.itemID)
+		if name then
+			request.name = name
+			currentRequest = request
+			currentPage = 0
+			nextResultIndex = 1
+			queryAttempts = 0
+			ScheduleSearch()
+			return
 		end
 		queueIndex = queueIndex + 1
 	end
@@ -163,10 +160,7 @@ end
 
 local function ContinueAfterCandidate(requery)
 	currentCandidate = nil
-	currentRequest.remaining = currentRequest.remaining - 1
-	if currentRequest.remaining <= 0 then
-		AdvanceRequest()
-	elseif requery then
+	if requery then
 		currentPage = 0
 		nextResultIndex = 1
 		ScheduleSearch()
@@ -188,24 +182,16 @@ local function ResolveTransaction(succeeded, confirmedFailure)
 		-- Continue on the refreshed page at that index rather than re-querying it.
 		nextResultIndex = currentCandidate.index
 		currentCandidate = nil
-		currentRequest.remaining = currentRequest.remaining - 1
-		advanceAfterPurchaseRefresh = currentRequest.remaining <= 0
 		if transactionListUpdated then
 			transactionDeadline = nil
 			transactionListUpdated = false
-			if advanceAfterPurchaseRefresh then
-				advanceAfterPurchaseRefresh = false
-				AdvanceRequest()
-			else
-				resumePage = true
-			end
+			resumePage = true
 		else
 			waitingForPurchaseRefresh = true
 			transactionDeadline = GetTime() + TRANSACTION_TIMEOUT
 		end
 	else
 		transactionDeadline = nil
-		advanceAfterPurchaseRefresh = false
 		transactionListUpdated = false
 		waitingForPurchaseRefresh = false
 		if confirmedFailure and pendingPurchase then
@@ -285,18 +271,36 @@ function module:ProcessCurrentPage()
 	end
 end
 
+local function ResultsMatchCurrentRequest()
+	local numResults = GetNumAuctionItems("list")
+	for index = 1, numResults do
+		local name, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hasAllInfo = GetAuctionItemInfo("list", index)
+		if hasAllInfo ~= false and name and name ~= currentRequest.name then
+			return false
+		end
+	end
+	return true
+end
+
 local function BuildQueue(disenchantList)
 	local requests = {}
+	local requestsByItem = {}
+	-- Query each candidate item once, then evaluate every live buyout returned for
+	-- it. Expanding cached price shapes caused repeated throttle waits for one item.
 	for itemID, itemData in pairs(disenchantList or {}) do
 		for _, auction in pairs(itemData.auctions) do
 			if addon:IsDealProfitable(auction.buyout, itemData.expectedValue) then
-				requests[#requests + 1] = {
-					itemID = itemID,
-					count = auction.count,
-					buyout = auction.buyout,
-					remaining = auction.numAuctions or 1,
-					profit = itemData.expectedValue - auction.buyout,
-				}
+				local profit = itemData.expectedValue - auction.buyout
+				local request = requestsByItem[itemID]
+				if request then
+					if profit > request.profit then
+						request.profit = profit
+					end
+				else
+					request = { itemID = itemID, profit = profit }
+					requestsByItem[itemID] = request
+					requests[#requests + 1] = request
+				end
 			end
 		end
 	end
@@ -341,7 +345,6 @@ local function StartSearch()
 	currentRequest = nil
 	nextResultIndex = 1
 	resumePage = false
-	advanceAfterPurchaseRefresh = false
 	transactionListUpdated = false
 	searchPending = false
 	transactionPending = false
@@ -468,14 +471,9 @@ function module:OnEnable()
 		elseif running and waitingForPurchaseRefresh and GetTime() >= transactionDeadline then
 			waitingForPurchaseRefresh = false
 			transactionDeadline = nil
-			if advanceAfterPurchaseRefresh then
-				advanceAfterPurchaseRefresh = false
-				AdvanceRequest()
-			else
-				currentPage = 0
-				nextResultIndex = 1
-				ScheduleSearch()
-			end
+			currentPage = 0
+			nextResultIndex = 1
+			ScheduleSearch()
 		elseif running and resumePage then
 			resumePage = false
 			module:ProcessCurrentPage()
@@ -526,20 +524,27 @@ end
 
 function module:AUCTION_ITEM_LIST_UPDATE()
 	if running and transactionPending then
-		transactionListUpdated = true
+		if ResultsMatchCurrentRequest() then
+			transactionListUpdated = true
+		end
 		return
 	elseif running and waitingForPurchaseRefresh then
+		if not ResultsMatchCurrentRequest() then
+			return
+		end
 		waitingForPurchaseRefresh = false
 		transactionDeadline = nil
-		if advanceAfterPurchaseRefresh then
-			advanceAfterPurchaseRefresh = false
-			AdvanceRequest()
-		else
-			self:ProcessCurrentPage()
-		end
+		self:ProcessCurrentPage()
 		return
 	end
 	if running and (waitingForResults or waitingForItemInfo) then
+		-- This payload-free event is shared with sorting and other addons' searches.
+		-- Ignore pages which do not belong to YAAHA's outstanding exact-name query.
+		if waitingForResults and not ResultsMatchCurrentRequest() then
+			waitingForResults = false
+			ScheduleSearch()
+			return
+		end
 		local receivedNewPage = waitingForResults
 		waitingForResults = false
 		waitingForItemInfo = false

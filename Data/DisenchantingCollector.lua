@@ -21,8 +21,8 @@ function module:ITEM_LOCK_CHANGED(_, bagID, slotID)
 	if not info or not info.isLocked then
 		return
 	end
-	local itemID, link, _, itemLevel = disenchantingData:GetItemDetails(info.hyperlink)
-	if itemID and itemLevel >= 130 then
+	local itemID, link = disenchantingData:GetItemDetails(info.hyperlink)
+	if itemID then
 		-- Cache the link before the cast destroys the source item. The later unlock
 		-- event can no longer be relied upon to return a link for this slot.
 		candidate = {
