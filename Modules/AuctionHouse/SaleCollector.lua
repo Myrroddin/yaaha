@@ -1,5 +1,9 @@
+-- Tracks auction sales, failures, purchases, refunds, and sale-rate observations.
+
 local AUCTION_OUTBID_MAIL_SUBJECT = AUCTION_OUTBID_MAIL_SUBJECT
+local C_AuctionHouse = C_AuctionHouse
 local C_Item = C_Item
+local Enum = Enum
 local format = string.format
 local GetAuctionItemInfo = GetAuctionItemInfo
 local GetInboxHeaderInfo = GetInboxHeaderInfo
@@ -17,9 +21,9 @@ local tableRemove = table.remove
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("SaleCollector", "AceEvent-3.0")
-local inventoryAverageBuy = addon:GetModule("InventoryAverageBuy")
-local scanner = addon:GetModule("Scanner")
-local vendorFlipTracking = addon:GetModule("VendorFlipTracking")
+local inventoryAverageBuy
+local scanner
+local vendorFlipTracking
 local invoices = {}
 local mailboxOpen = false
 local moneyMail = {}
@@ -28,7 +32,7 @@ local SALE_LEDGER_LIFETIME = 60 * SECONDS_PER_DAY
 local playerName, playerRealm, playerFullName
 local OUTBID_MAIL_PATTERN = AUCTION_OUTBID_MAIL_SUBJECT
 	and "^" .. stringGsub(AUCTION_OUTBID_MAIL_SUBJECT, "%%s", "(.+)") .. "$"
-local SALES_SCOPES = { "factionrealm", "realm" }
+local usesModernAuctionHouse = C_AuctionHouse ~= nil and C_AuctionHouse.GetOwnedAuctions ~= nil
 
 local function TransactionKey(seller, itemID, count, saleValue)
 	return format("%s\031%d\031%d\031%d", seller or "", itemID, count, saleValue)
@@ -52,9 +56,7 @@ end
 
 local function PruneAllRealmSales()
 	local now = GetServerTime()
-	for index = 1, #SALES_SCOPES do
-		local scope = SALES_SCOPES[index]
-		local realmSales = addon.db[scope].realmSales
+	for _, realmSales in pairs(addon.db.realm.sales.auctionHouses) do
 		for itemID, data in pairs(realmSales) do
 			PruneRealmSales(data, now)
 			if not data.observations[1] then
@@ -64,8 +66,8 @@ local function PruneAllRealmSales()
 	end
 end
 
-local function RecordRealmObservation(scope, itemID, attempted, sold, saleValue, source, transactionKey, resolutionKey)
-	local realmSales = addon.db[scope].realmSales
+local function RecordRealmObservation(auctionHouseType, itemID, attempted, sold, saleValue, source, transactionKey, resolutionKey)
+	local realmSales = addon:GetRealmSales(auctionHouseType)
 	local data = realmSales[itemID]
 	if not data then
 		data = { observations = {} }
@@ -94,11 +96,12 @@ local function NewResolutionKey()
 	return format("%s\031%d\031%d", playerFullName, GetServerTime(), addon.db.char.syncSequence)
 end
 
-local function RemoveRealmFailure(scope, itemID, resolutionKey)
+local function RemoveRealmFailure(auctionHouseType, itemID, resolutionKey)
 	if not resolutionKey then
 		return
 	end
-	local data = addon.db[scope].realmSales[itemID]
+	local realmSales = addon:GetRealmSales(auctionHouseType)
+	local data = realmSales[itemID]
 	if not data then
 		return
 	end
@@ -136,6 +139,7 @@ local function AddSaleLedgerEntry(scope, listing)
 	end
 	PruneSaleLedger(scope, GetServerTime())
 	ledger[#ledger + 1] = {
+		auctionHouseType = listing.auctionHouseType,
 		itemID = listing.itemID,
 		name = listing.name,
 		count = listing.count,
@@ -161,8 +165,8 @@ local function RemoveSaleLedgerEntry(scope, listing)
 	end
 end
 
-local function RecordSale(scope, listing, saleValue)
-	local personalSales = addon.db[scope].personalSales
+local function RecordSale(listing, saleValue)
+	local personalSales = addon.db.realm.sales.personal
 	local data = personalSales[listing.itemID]
 	if not data then
 		data = { attempted = 0, sold = 0, totalSaleValue = 0 }
@@ -174,27 +178,44 @@ local function RecordSale(scope, listing, saleValue)
 	-- A vanished owner listing is initially a cancellation or expiry. Seller mail can
 	-- later prove that exact posting sold, in which case its provisional failure must
 	-- be replaced rather than counted alongside the successful outcome.
-	RemoveRealmFailure(scope, listing.itemID, listing.resolutionKey)
+	RemoveRealmFailure(listing.auctionHouseType, listing.itemID, listing.resolutionKey)
 	-- Realm rates describe outcomes resolved during the rolling window. The original
 	-- posting may be hours or days older, so carry both sides of this outcome here.
-	RecordRealmObservation(scope, listing.itemID, listing.count, listing.count, saleValue,
+	RecordRealmObservation(listing.auctionHouseType, listing.itemID, listing.count, listing.count, saleValue,
 		"seller", TransactionKey(playerFullName, listing.itemID, listing.count, saleValue),
 		listing.resolutionKey)
 end
 
-local function RecordFailure(scope, listing)
+local function RecordFailure(listing)
 	if not listing.resolutionKey then
 		return
 	end
-	RecordRealmObservation(scope, listing.itemID, listing.count, 0, 0,
+	RecordRealmObservation(listing.auctionHouseType, listing.itemID, listing.count, 0, 0,
 		"failure", listing.resolutionKey, listing.resolutionKey)
 end
 
-local function ReadOwnedAuctions()
+local function TrackNewListing(scope, listing)
+	listing.resolutionKey = NewResolutionKey()
+	local personalSales = addon.db.realm.sales.personal
+	local data = personalSales[listing.itemID]
+	if not data then
+		data = { attempted = 0, sold = 0, totalSaleValue = 0 }
+		personalSales[listing.itemID] = data
+	end
+	data.attempted = data.attempted + listing.count
+	AddSaleLedgerEntry(scope, listing)
+	inventoryAverageBuy:MoveOutOfInventory(listing.itemID, listing.count)
+	vendorFlipTracking:PreserveQuantity(listing.itemID, listing.count)
+end
+
+-- Classic exposes owned auctions as an indexed list. Its entries lack stable
+-- auction IDs, so matching uses listing properties and occurrence counts.
+local function ReadOwnedAuctionsClassic()
 	local scope = scanner:GetAuctionScope()
 	if not scope then
 		return
 	end
+	local auctionHouseType = addon:GetAuctionHouseTypeForScope(scope)
 
 	local previous = addon.db.char.ownedAuctions[scope] or {}
 	local numOwned = GetNumAuctionItems("owner")
@@ -230,7 +251,7 @@ local function ReadOwnedAuctions()
 				if match and not soldKeys[match.key] then
 					matches[#matches] = nil
 					soldKeys[match.key] = true
-					RecordSale(scope, match.listing, bidAmount > 0 and bidAmount or buyout)
+					RecordSale(match.listing, bidAmount > 0 and bidAmount or buyout)
 					RemoveSaleLedgerEntry(scope, match.listing)
 				end
 			elseif count and count > 0 then
@@ -238,6 +259,7 @@ local function ReadOwnedAuctions()
 				local occurrence = (currentCounts[key] or 0) + 1
 				currentCounts[key] = occurrence
 				current[key .. ":" .. occurrence] = {
+					auctionHouseType = auctionHouseType,
 					itemID = itemID,
 					name = name,
 					count = count,
@@ -270,17 +292,7 @@ local function ReadOwnedAuctions()
 				previousMatches[#previousMatches] = nil
 				listing.resolutionKey = previousListing.resolutionKey
 			else
-				listing.resolutionKey = NewResolutionKey()
-				local personalSales = addon.db[scope].personalSales
-				local data = personalSales[listing.itemID]
-				if not data then
-					data = { attempted = 0, sold = 0, totalSaleValue = 0 }
-					personalSales[listing.itemID] = data
-				end
-				data.attempted = data.attempted + listing.count
-				AddSaleLedgerEntry(scope, listing)
-				inventoryAverageBuy:MoveOutOfInventory(listing.itemID, listing.count)
-				vendorFlipTracking:PreserveQuantity(listing.itemID, listing.count)
+				TrackNewListing(scope, listing)
 			end
 		end
 	end
@@ -289,11 +301,88 @@ local function ReadOwnedAuctions()
 	-- a failure now; a later seller invoice can still replace this exact observation.
 	for _, matches in pairs(previousByListing) do
 		for index = 1, #matches do
-			RecordFailure(scope, matches[index])
+			RecordFailure(matches[index])
 		end
 	end
 
 	addon.db.char.ownedAuctions[scope] = current
+end
+
+local function ReadOwnedAuctionsModern()
+	local scope = scanner:GetAuctionScope()
+	---@diagnostic disable-next-line: wrong-flavor-api
+	if not scope or not C_AuctionHouse.HasFullOwnedAuctionResults() then
+		return
+	end
+
+	local previous = addon.db.char.ownedAuctions[scope] or {}
+	local current = {}
+	local sold = {}
+	local auctionHouseType = addon:GetAuctionHouseTypeForScope(scope)
+	---@diagnostic disable-next-line: wrong-flavor-api
+	local auctions = C_AuctionHouse.GetOwnedAuctions()
+	for index = 1, #auctions do
+		local auction = auctions[index]
+		local itemID = auction.itemKey and auction.itemKey.itemID
+		if itemID and auction.quantity and auction.quantity > 0
+			and not C_Item.GetItemNameByID(itemID) then
+			C_Item.RequestLoadItemDataByID(itemID)
+			return
+		end
+	end
+	for index = 1, #auctions do
+		local auction = auctions[index]
+		local itemID = auction.itemKey and auction.itemKey.itemID
+		local count = auction.quantity
+		local unitBid = auction.bidAmount or 0
+		local unitBuyout = auction.buyoutAmount or 0
+		local name = itemID and C_Item.GetItemNameByID(itemID)
+		if itemID and count and count > 0 and name then
+			local listing = {
+				auctionHouseType = auctionHouseType,
+				auctionID = auction.auctionID,
+				itemID = itemID,
+				name = name,
+				count = count,
+				minBid = unitBid * count,
+				buyout = unitBuyout * count,
+			}
+			local previousListing = previous[auction.auctionID]
+			if auction.status == Enum.AuctionStatus.Sold then
+				if previousListing then
+					sold[auction.auctionID] = true
+					local unitPrice = unitBid > 0 and unitBid or unitBuyout
+					RecordSale(previousListing, unitPrice * count)
+					RemoveSaleLedgerEntry(scope, previousListing)
+				end
+			else
+				if previousListing then
+					listing.resolutionKey = previousListing.resolutionKey
+				else
+					TrackNewListing(scope, listing)
+				end
+				current[auction.auctionID] = listing
+			end
+		end
+	end
+
+	for auctionID, listing in pairs(previous) do
+		if not current[auctionID] and not sold[auctionID] then
+			RecordFailure(listing)
+		end
+	end
+	addon.db.char.ownedAuctions[scope] = current
+end
+
+local function QueryOwnedAuctionsModern()
+	if not scanner:GetAuctionScope() then
+		return
+	end
+	---@diagnostic disable-next-line: wrong-flavor-api
+	C_AuctionHouse.QueryOwnedAuctions({ {
+		sortOrder = Enum.AuctionHouseSortOrder.Name,
+		reverseSort = false,
+	} })
 end
 
 local function ReadInvoice(index)
@@ -422,7 +511,7 @@ local function CollectAuctionInvoice(invoice)
 		for index = #ledger, 1, -1 do
 			local listing = ledger[index]
 			if listing.name == invoice.itemName and listing.count == invoice.count and listing.buyout == invoice.buyout then
-				RecordSale(scope, listing, saleValue)
+				RecordSale(listing, saleValue)
 				inventoryAverageBuy:RecordRemoval(listing.itemID, listing.count)
 				vendorFlipTracking:RecordSale(listing.itemID, listing.count,
 					saleValue - (invoice.consignment or 0))
@@ -498,6 +587,9 @@ local function CloseMailbox()
 end
 
 local function RecordPendingPurchase(listType, index, price, action, dealType)
+	if usesModernAuctionHouse then
+		return
+	end
 	local scope = scanner:GetAuctionScope()
 	if not scope or listType ~= "list" then
 		return
@@ -511,6 +603,8 @@ local function RecordPendingPurchase(listType, index, price, action, dealType)
 	local vendorReturn = vendorSell and vendorSell * count or 0
 	local vendorFlip = dealType == "vendor" or dealType == nil
 		and addon:IsDealProfitable(price, vendorReturn)
+	local seller = ownerFullName and addon:NormalizeCharacterName(ownerFullName)
+		or owner and addon:NormalizeCharacterName(owner, playerRealm)
 
 	local now = GetServerTime()
 	local pending = addon.db.char.pendingPurchases
@@ -520,7 +614,7 @@ local function RecordPendingPurchase(listType, index, price, action, dealType)
 			tableRemove(pending, pendingIndex)
 		elseif action == "bid" and purchase.action == "bid" and purchase.vendorFlip
 			and purchase.itemID == itemID and purchase.count == count and purchase.scope == scope
-			and purchase.seller == (ownerFullName or owner and playerRealm and owner .. "-" .. playerRealm or owner) then
+			and purchase.seller == seller then
 			-- A later bid on the same live auction supersedes the earlier pending bid.
 			-- Keeping one record prevents repeated searches for each bid increment.
 			purchase.buyout = buyout
@@ -553,7 +647,7 @@ local function RecordPendingPurchase(listType, index, price, action, dealType)
 		minBid = minBid,
 		name = name,
 		scope = scope,
-		seller = ownerFullName or owner and playerRealm and owner .. "-" .. playerRealm or owner,
+		seller = seller,
 		price = price,
 		timestamp = now,
 		vendorSell = vendorSell,
@@ -568,6 +662,9 @@ local function HookPendingPurchase(listType, index, price)
 end
 
 function module:OnInitialize()
+	inventoryAverageBuy = addon:GetModule("InventoryAverageBuy")
+	scanner = addon:GetModule("Scanner")
+	vendorFlipTracking = addon:GetModule("VendorFlipTracking")
 	-- GetServerTime continues across logout. Clear the complete rolling realm window
 	-- as soon as AceDB is available rather than waiting for a mailbox or sync event.
 	PruneAllRealmSales()
@@ -575,11 +672,16 @@ end
 
 function module:OnEnable()
 	playerName, playerRealm, playerFullName = addon:GetPlayerIdentity()
-	self:RegisterEvent("AUCTION_OWNED_LIST_UPDATE", ReadOwnedAuctions)
 	self:RegisterEvent("MAIL_INBOX_UPDATE", CacheAuctionInvoices)
 	self:RegisterEvent("MAIL_CLOSED", CloseMailbox)
 	self:RegisterEvent("MAIL_SHOW", OpenMailbox)
-	self:RegisterEvent("PLAYER_ENTERING_WORLD")
+	if usesModernAuctionHouse then
+		self:RegisterEvent("AUCTION_HOUSE_SHOW", QueryOwnedAuctionsModern)
+		self:RegisterEvent("OWNED_AUCTIONS_UPDATED", ReadOwnedAuctionsModern)
+	else
+		self:RegisterEvent("AUCTION_OWNED_LIST_UPDATE", ReadOwnedAuctionsClassic)
+		self:RegisterEvent("PLAYER_ENTERING_WORLD")
+	end
 end
 
 function module:PLAYER_ENTERING_WORLD()
@@ -621,9 +723,9 @@ function module:PruneRealmSales()
 	PruneAllRealmSales()
 end
 
-function module:GetRealmSaleData(itemID, scope, scopeDB)
-	scopeDB = scopeDB or addon.db[scope]
-	local data = scopeDB.realmSales[itemID]
+function module:GetRealmSaleData(itemID, auctionHouseType)
+	local realmSales = addon:GetRealmSales(auctionHouseType)
+	local data = realmSales[itemID]
 	if not data then
 		return
 	end
@@ -637,7 +739,7 @@ function module:GetRealmSaleData(itemID, scope, scopeDB)
 		totalSaleValue = totalSaleValue + observation.totalSaleValue
 	end
 	if attempted == 0 and sold == 0 then
-		scopeDB.realmSales[itemID] = nil
+		realmSales[itemID] = nil
 		return
 	end
 
@@ -645,9 +747,8 @@ function module:GetRealmSaleData(itemID, scope, scopeDB)
 		sold > 0 and totalSaleValue / sold or nil
 end
 
-function module:GetPersonalSaleData(itemID, scope, scopeDB)
-	scopeDB = scopeDB or addon.db[scope]
-	local data = scopeDB.personalSales[itemID]
+function module:GetPersonalSaleData(itemID)
+	local data = addon.db.realm.sales.personal[itemID]
 	if not data or data.attempted <= 0 then
 		return
 	end

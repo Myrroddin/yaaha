@@ -1,5 +1,4 @@
-## Interface: 38002, 20506, 11509
-## AllowLoadGameType: vanilla, tbc, wrath
+## Interface: 120100, 50504, 38002, 20506, 16001, 11509
 ## Title: YAAHA
 ## Notes: Yet Another Auction House Addon
 ## Notes-deDE: @localization(locale="deDE", key="Notes", namespace="ToC")@
@@ -76,21 +75,26 @@ Locales\zhTW.lua
 Core.lua
 Options.lua
 Data\ConvertData.lua
-Data\DisenchantingData.lua
 Data\DisenchantingCollector.lua
+Data\DisenchantingData.lua
 Data\EnchantingCraftData.lua
-Data\EnchantingData.lua [AllowLoadGameType wrath]
-Modules\ProfessionScanner.lua
-Modules\DataProcessing.lua
-Modules\AuctionHouseUI.lua
-Modules\Scanner.lua
-Modules\MerchantData.lua
-Modules\InventoryAverageBuy.lua
-Modules\VendorFlipTracking.lua
-Modules\SaleCollector.lua
-Modules\Tooltip.lua
-Modules\VendorDeals.lua
-Modules\DisenchantingDeals.lua
-Modules\Sync.lua
-Modules\Storage.lua
-API.lua
+Data\EnchantingScrollData.lua [AllowLoadGameType wrath]
+Modules\AuctionHouse\AuctionHouseUI-classic.lua [AllowLoadGameType vanilla, tbc, wrath]
+Modules\AuctionHouse\AuctionHouseUI-modern.lua [AllowLoadGameType standard, mists, camelot]
+Modules\AuctionHouse\SaleCollector.lua
+Modules\AuctionHouse\Scanner-classic.lua [AllowLoadGameType vanilla, tbc, wrath]
+Modules\AuctionHouse\Scanner-modern.lua [AllowLoadGameType standard, mists, camelot]
+Modules\Data\DataProcessing.lua
+Modules\Data\Storage.lua
+Modules\Data\Sync.lua
+Modules\Disenchanting\DisenchantingDeals-classic.lua [AllowLoadGameType vanilla, tbc, wrath]
+Modules\Disenchanting\DisenchantingDeals-modern.lua [AllowLoadGameType standard, mists, camelot]
+Modules\Inventory\InventoryAverageBuy.lua
+Modules\Professions\ProfessionScanner-classic.lua [AllowLoadGameType vanilla, tbc, wrath]
+Modules\Professions\ProfessionScanner-modern.lua [AllowLoadGameType standard, mists, camelot]
+Modules\Tooltip\Tooltip.lua
+Modules\Vendor\MerchantData.lua
+Modules\VendorFlip\VendorDeals-classic.lua [AllowLoadGameType vanilla, tbc, wrath]
+Modules\VendorFlip\VendorDeals-modern.lua [AllowLoadGameType standard, mists, camelot]
+Modules\VendorFlip\VendorFlipTracking.lua
+API\API.lua

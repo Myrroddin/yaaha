@@ -1,3 +1,5 @@
+-- Finds and purchases Classic auction listings whose disenchanting value covers their buyout.
+
 local BUYOUT = BUYOUT
 local CanSendAuctionQuery = CanSendAuctionQuery
 local C_Item = C_Item
@@ -27,7 +29,7 @@ local dataProcessing = addon:GetModule("DataProcessing")
 local disenchantingData = addon:GetModule("DisenchantingData")
 local saleCollector = addon:GetModule("SaleCollector")
 local scanner = addon:GetModule("Scanner")
-local tooltip = addon:GetModule("Tooltip")
+local tooltip
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
 local GREEN_NUMBER = "|cff20ff20"
@@ -438,6 +440,10 @@ function module:YAAHA_VENDOR_CACHE_READY(_, scope)
 	wasScannerBusy = false
 	actionButton:Enable()
 	ShowCacheReady()
+end
+
+function module:OnInitialize()
+	tooltip = addon:GetModule("Tooltip")
 end
 
 function module:OnEnable()

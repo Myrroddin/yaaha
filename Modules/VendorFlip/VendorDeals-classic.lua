@@ -1,3 +1,5 @@
+-- Finds and presents Classic auction listings that can be resold to NPC vendors for profit.
+
 local BID = BID
 local BUYOUT = BUYOUT
 local CanSendAuctionQuery = CanSendAuctionQuery

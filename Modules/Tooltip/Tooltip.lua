@@ -1,5 +1,8 @@
+-- Adds YAAHA auction, sales, inventory, destruction, and crafting data to item tooltips.
+
 local AUCTIONS = AUCTIONS
 local _G = _G
+local AUCTION_HOUSE = AUCTION_HOUSE
 local AUCTION_HOUSE_BROWSE_HEADER_QUANTITY = AUCTION_HOUSE_BROWSE_HEADER_QUANTITY
 local C_Container = C_Container
 local C_Item = C_Item
@@ -206,6 +209,9 @@ local function HasAuctionData(scopeDB)
 end
 
 local function GetContext(scope)
+	if addon.UsesSharedAuctionHouse then
+		return "realm", addon.db.realm, AUCTION_HOUSE
+	end
 	if scope == "realm" then
 		return scope, addon.db.realm, FACTION_NEUTRAL
 	elseif scope == "factionrealm" then
@@ -283,17 +289,18 @@ end
 
 function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 	local activeScope, scopeDB, scopeName = GetContext(scope)
+	local auctionHouseType = addon:GetAuctionHouseTypeForScope(activeScope)
 	local data = scopeDB.auctionDB[itemID]
 	local priceScope = activeScope == "realm" and "realm" or "factionrealm"
 	local disenchant = disenchantingData:GetValue(itemID, priceScope, scopeDB.auctionDB)
 	local inventoryBuy = inventoryAverageBuy:GetValue(itemID)
-	local allowMastery = activeScope == "factionrealm"
+	local allowMastery = addon.UsesSharedAuctionHouse or activeScope == "factionrealm"
 	local factionCrafting = professionScanner:GetItemCrafting(
 		itemID, scopeDB.auctionDB, false, allowMastery)
 	local knownCraft = professionScanner:IsItemKnown(itemID, false)
-	local personalSaleRate = saleCollector:GetPersonalSaleData(itemID, priceScope, scopeDB)
-	local realmSaleRate, realmSoldPerDay, realmAverageSaleValue = saleCollector:GetRealmSaleData(
-		itemID, priceScope, scopeDB)
+	local personalSaleRate = saleCollector:GetPersonalSaleData(itemID)
+	local realmSaleRate, realmSoldPerDay, realmAverageSaleValue =
+		saleCollector:GetRealmSaleData(itemID, auctionHouseType)
 	local _, _, _, _, _, _, _, _, _, _, vendorSell = C_Item.GetItemInfo(itemID)
 	local vendorBuy = addon.db.global.vendorBuyPrices[itemID]
 	if not data and not disenchant and not inventoryBuy and not knownCraft and personalSaleRate == nil
@@ -304,7 +311,7 @@ function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 
 	local settings = addon.db.profile.tooltip
 	local multiplier = GetCursorStackCount(itemID)
-	local auctionCut = activeScope == "realm" and 0.85 or 0.95
+	local auctionCut = auctionHouseType == "Neutral" and 0.85 or 0.95
 	local activeSection, addedHeader
 	local function EnsureHeader()
 		if not addedHeader then
@@ -408,7 +415,7 @@ function module:AddRecipeData(tooltip, spellID, scope, reuseHeader, suppressRefr
 	if not professionScanner:IsRecipeKnown(spellID, false) then
 		return
 	end
-	local allowMastery = activeScope == "factionrealm"
+	local allowMastery = addon.UsesSharedAuctionHouse or activeScope == "factionrealm"
 	local factionCrafting = professionScanner:GetRecipeCrafting(
 		spellID, scopeDB.auctionDB, false, allowMastery)
 	local settings = addon.db.profile.tooltip

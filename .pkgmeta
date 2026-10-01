@@ -27,4 +27,4 @@ ignore:
   - Libs/LibStub/tests
   - Libs/LibDataBroker-1.1/README.textile
   - README.md
-  - API.md
+  - API\API.md

@@ -1,3 +1,5 @@
+-- Converts auction snapshots and synced records into market values and deal-search caches.
+
 local abs = math.abs
 local C_Item = C_Item
 local coroutineCreate = coroutine.create
@@ -21,13 +23,11 @@ local sort = table.sort
 local sqrt = math.sqrt
 local tostring = tostring
 local type = type
-local UnitFactionGroup = UnitFactionGroup
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("DataProcessing")
 local disenchantingData = addon:GetModule("DisenchantingData")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
-local playerFaction = UnitFactionGroup("player")
 
 local SECONDS_PER_DAY = 24 * 60 * 60
 local MAX_HISTORY_DAYS = 60
@@ -458,7 +458,7 @@ local function FinishProcessing(success, result, vendorList, disenchantList, sco
 		addon.db[scope].disenchantList = disenchantList
 		addon.db[scope].vendorList = vendorList
 		addon:FireAPIEvent("AUCTION_HOUSE_DATA_UPDATED",
-			scope == "realm" and "Neutral" or playerFaction, "scan")
+			addon:GetAuctionHouseTypeForScope(scope), "scan")
 	end
 
 	if callback then

@@ -1,3 +1,5 @@
+-- Learns disenchanting results by matching the player's destroyed item to its loot.
+
 local C_Container = C_Container
 local GetLootSlotInfo = GetLootSlotInfo
 local GetLootSlotLink = GetLootSlotLink
@@ -8,7 +10,7 @@ local next = next
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("DisenchantingCollector", "AceEvent-3.0")
-local disenchantingData = addon:GetModule("DisenchantingData")
+local disenchantingData
 
 local DISENCHANT_SPELL_ID = 13262
 local candidate, awaitingLoot
@@ -63,6 +65,10 @@ end
 
 function module:LOOT_CLOSED()
 	awaitingLoot = nil
+end
+
+function module:OnInitialize()
+	disenchantingData = addon:GetModule("DisenchantingData")
 end
 
 function module:OnEnable()

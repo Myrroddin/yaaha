@@ -29,7 +29,8 @@ Configurable item tooltips can show:
 - Price trends
 - Minimum bid and buyout
 - Quantity available at auction
-- Personal and realm sale information
+- A realm-wide personal sale rate across the player's characters and auction houses
+- Recent sale rates, quantities, and average values kept separate by auction-house market
 - Vendor buy and sell prices
 - Average purchase value for items still owned
 - Known-recipe crafting costs, material breakdowns, and estimated profit or loss
@@ -45,7 +46,7 @@ YAAHA never purchases anything automatically. The player chooses whether to bid,
 
 ### Sale information
 
-YAAHA follows auction outcomes to calculate the player's sale rate. Recent realm sale rates, quantities sold, and average sale values are also available from the player's observations and synchronized data.
+YAAHA follows auction outcomes to calculate the player's realm-wide personal sale rate, regardless of which character or auction house made the sale. Recent realm sale rates, quantities sold, and average sale values remain tied to the market where those outcomes occurred and can also include synchronized observations.
 
 ### Known professions
 
@@ -63,7 +64,7 @@ For readers interested in how auction listings can be turned into a more represe
 
 ### Synchronization
 
-YAAHA can share auction and sale information with nearby players and guild members who also use the addon. Alliance, Horde, and Neutral information remains separate.
+YAAHA can share auction and sale information with guild members who use the addon and share the same auction house through the same or a connected realm. Alliance, Horde, and Neutral information remains separate on faction-based clients; clients with a shared auction house use one shared market.
 
 ### Broker and minimap
 

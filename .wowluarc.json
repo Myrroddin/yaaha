@@ -6,8 +6,10 @@
   ],
   "framexml": true,
   "flavors": [
+    "retail",
     "classic",
-    "classic_era"
+    "classic_era",
+    "forever"
   ],
   "diagnostics": {
     "enable": [

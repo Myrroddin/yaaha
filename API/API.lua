@@ -16,7 +16,7 @@ local storage = addon:GetModule("Storage")
 -- change to the public contract requires consumers to distinguish API behavior.
 local API_VERSION = 1
 
----@alias YAAHA_API.AuctionHouseType "Alliance"|"Horde"|"Neutral"
+---@alias YAAHA_API.AuctionHouseType "Alliance"|"Horde"|"Neutral"|"Shared"
 ---@alias YAAHA_API.DataUpdateSource "scan"|"sync"
 ---@alias YAAHA_API.DataUpdateEvent "AUCTION_HOUSE_DATA_UPDATED"
 ---@alias YAAHA_API.MarketValueSource "currentMarketValue"|"midweekMarketValue"|"weeklyMarketValue"|"biweeklyMarketValue"|"monthlyMarketValue"|"bimonthlyMarketValue"
@@ -86,7 +86,7 @@ local API_VERSION = 1
 ---@field totalReagentValue integer Reagent value for one recipe cast in copper.
 ---@field outputQuantity number Average number of items produced per cast.
 ---@field masteryYield number Expected finished-item auction-return multiplier from a matching Alchemy mastery; otherwise `1`. This does not reduce crafting or material costs.
----@field character string Character whose known recipe was used.
+---@field character string Canonical character identity whose known recipe was used (`name-realm` or Forever's `firstName-surname`).
 ---@field profession string Localized profession name.
 ---@field stale boolean Whether the character's profession snapshot predates the current game-client build.
 ---@field spellID integer Recipe spell ID.
@@ -119,7 +119,6 @@ local API_VERSION = 1
 ---@field GetRealmSaleRate fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): number?
 ---@field GetRealmSoldPerDay fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
 ---@field GetRealmAverageSaleValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
----@field GetVendorFlipProfit fun(): integer
 ---@field IsDisenchantable fun(itemID: integer): boolean
 ---@field GetDisenchantResults fun(itemID: integer): YAAHA_API.DisenchantResults?
 ---@field GetDisenchantValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType, fullResults?: boolean): integer|YAAHA_API.PricedDisenchantResults|nil
@@ -159,8 +158,27 @@ local copperFields = {
 	"bimonthlyMarketValue",
 }
 
-local function GetAuctionScope(auctionHouseType)
+local function ResolveAuctionHouseType(auctionHouseType)
+	if addon.UsesSharedAuctionHouse then
+		if auctionHouseType == nil or auctionHouseType == "Alliance"
+			or auctionHouseType == "Horde" or auctionHouseType == "Neutral"
+			or auctionHouseType == "Shared" then
+			return "Shared"
+		end
+		return
+	end
 	auctionHouseType = auctionHouseType or playerFaction
+	if auctionHouseType == "Alliance" or auctionHouseType == "Horde"
+		or auctionHouseType == "Neutral" then
+		return auctionHouseType
+	end
+end
+
+local function GetAuctionScope(auctionHouseType)
+	auctionHouseType = ResolveAuctionHouseType(auctionHouseType)
+	if auctionHouseType == "Shared" then
+		return "realm"
+	end
 	if auctionHouseType == "Neutral" then
 		return "realm"
 	end
@@ -211,15 +229,6 @@ local function NormalizeRate(value)
 	return floor(value * 1000 + 0.5) / 1000
 end
 
-local function NormalizeSignedCopper(value)
-	if type(value) ~= "number" then
-		return nil
-	end
-	-- Vendor-flip profit is the one public monetary value for which zero and a
-	-- negative balance are meaningful rather than indicators of missing data.
-	return value < 0 and -floor(-value + 0.5) or floor(value + 0.5)
-end
-
 local function GetItemSource(itemID, auctionHouseType)
 	if type(itemID) ~= "number" or itemID <= 0 or itemID ~= floor(itemID) then
 		return nil
@@ -238,10 +247,9 @@ local function GetRealmSaleData(itemID, auctionHouseType)
 	if type(itemID) ~= "number" or itemID <= 0 or itemID ~= floor(itemID) then
 		return
 	end
-	auctionHouseType = auctionHouseType or playerFaction
-	local scopeDB, scope = GetAuctionContext(auctionHouseType)
-	if scopeDB then
-		return saleCollector:GetRealmSaleData(itemID, scope, scopeDB)
+	auctionHouseType = ResolveAuctionHouseType(auctionHouseType)
+	if auctionHouseType then
+		return saleCollector:GetRealmSaleData(itemID, auctionHouseType)
 	end
 end
 
@@ -407,11 +415,6 @@ function API.GetRealmAverageSaleValue(itemID, auctionHouseType)
 	return NormalizeCopper(value)
 end
 
----@return integer vendorFlipProfit
-function API.GetVendorFlipProfit()
-	return NormalizeSignedCopper(addon.db.realm.vendorFlipProfit) or 0
-end
-
 ---@param itemID integer
 ---@return boolean isDisenchantable
 function API.IsDisenchantable(itemID)
@@ -566,7 +569,8 @@ function API.GetCraftingValue(itemID, auctionHouseType, fullResults, currentChar
 		return
 	end
 	local auctionDB = GetAuctionDB(auctionHouseType)
-	local allowMastery = GetAuctionScope(auctionHouseType) == "factionrealm"
+	local allowMastery = addon.UsesSharedAuctionHouse
+		or GetAuctionScope(auctionHouseType) == "factionrealm"
 	local result = auctionDB and professionScanner:GetItemCrafting(
 		itemID, auctionDB, currentCharacterOnly, allowMastery)
 	return fullResults and CopyCraftingResult(result) or result and NormalizeRequiredCopper(result.value)
@@ -584,7 +588,8 @@ function API.GetRecipeCraftingValue(spellID, auctionHouseType, fullResults, curr
 		return
 	end
 	local auctionDB = GetAuctionDB(auctionHouseType)
-	local allowMastery = GetAuctionScope(auctionHouseType) == "factionrealm"
+	local allowMastery = addon.UsesSharedAuctionHouse
+		or GetAuctionScope(auctionHouseType) == "factionrealm"
 	local result = auctionDB and professionScanner:GetRecipeCrafting(
 		spellID, auctionDB, currentCharacterOnly, allowMastery)
 	return fullResults and CopyCraftingResult(result) or result and NormalizeRequiredCopper(result.value)

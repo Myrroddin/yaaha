@@ -1,3 +1,5 @@
+-- Scans known Classic profession recipes and calculates material and crafting values.
+
 local C_Item = C_Item
 local C_Timer = C_Timer
 local CollapseCraftSkillLine = CollapseCraftSkillLine
@@ -60,16 +62,15 @@ local module = addon:NewModule("ProfessionScanner", "AceEvent-3.0")
 local convertData = addon:GetModule("ConvertData")
 local enchantingCraftData = addon:GetModule("EnchantingCraftData")
 -- The spell-to-scroll and vellum mapping is loaded only by Wrath-based clients.
-local enchantingData = addon:GetModule("EnchantingData", true)
+local enchantingScrollData = addon:GetModule("EnchantingScrollData", true)
 
 local currentBuild = select(2, GetBuildInfo())
 local isWrath = WOW_PROJECT_ID == WOW_PROJECT_WRATH_CLASSIC
 local recipeRevision = 0
 local recipeIndexes = {}
 
-local function GetPlayerFullName()
-	local _, _, fullName = addon:GetPlayerIdentity()
-	return fullName
+local function GetPlayerCharacterKey()
+	return addon:GetCharacterKey()
 end
 
 local function GetSpellID(link)
@@ -159,8 +160,8 @@ local function GetProfessionIdentity(name)
 end
 
 local function ReconcileProfessions()
-	local playerFullName = GetPlayerFullName()
-	if not playerFullName then
+	local characterKey = GetPlayerCharacterKey()
+	if not characterKey then
 		return
 	end
 	local skillLines = ReadSkillLines()
@@ -170,7 +171,7 @@ local function ReconcileProfessions()
 		return
 	end
 
-	local professions = addon.db.factionrealm.knownProfessions[playerFullName]
+	local professions = addon.db.factionrealm.knownProfessions[characterKey]
 	local changed
 	for professionKey, profession in pairs(professions) do
 		-- skillLineName is set only when Blizzard's complete skill list verified the
@@ -251,8 +252,8 @@ local function ReadRecipe(index, name, isCraft, altVerb)
 	local spellID = GetSpellID(recipeLink) or GetSpellID(outputLink)
 	local outputItemID = isCraft and GetCraftOutputItemID(name, outputLink, spellID)
 		or addon:GetItemID(outputLink)
-	if isWrath and enchantingData and spellID and not outputItemID then
-		outputItemID = enchantingData:GetEnchant(spellID)
+	if isWrath and enchantingScrollData and spellID and not outputItemID then
+		outputItemID = enchantingScrollData:GetEnchant(spellID)
 	end
 	local minMade, maxMade
 	if isCraft then
@@ -293,14 +294,14 @@ local function SaveProfession(name, currentLevel, maxLevel, recipes)
 	if not name or name == "" or name == UNKNOWN then
 		return
 	end
-	local playerFullName = GetPlayerFullName()
-	if not playerFullName then
+	local characterKey = GetPlayerCharacterKey()
+	if not characterKey then
 		return
 	end
 	local skillLineID, isPrimary, specializationIndex = GetProfessionIdentity(name)
 	local skillLines = ReadSkillLines()
 	local skillLineName = skillLines and ResolveSkillLineName(name, skillLines)
-	local character = addon.db.factionrealm.knownProfessions[playerFullName]
+	local character = addon.db.factionrealm.knownProfessions[characterKey]
 	-- GetProfessions omits some Classic Craft-frame categories, including First
 	-- Aid. Their localized names remain safe fallback keys; verified skillLineName
 	-- values still allow reconciliation to remove them if Blizzard does.
@@ -403,10 +404,10 @@ local function ResolveKnownCraftOutput(itemID, currentCharacterOnly)
 	if not itemName then
 		return
 	end
-	local playerFullName = GetPlayerFullName()
+	local characterKey = GetPlayerCharacterKey()
 	local resolved
 	for characterName, professions in pairs(addon.db.factionrealm.knownProfessions) do
-		if not currentCharacterOnly or characterName == playerFullName then
+		if not currentCharacterOnly or characterName == characterKey then
 			for _, profession in pairs(professions) do
 				for _, recipe in pairs(profession.recipes or {}) do
 					if not recipe.outputItemID and recipe.name == itemName then
@@ -423,7 +424,7 @@ local function ResolveKnownCraftOutput(itemID, currentCharacterOnly)
 end
 
 local function BuildRecipeIndex(currentCharacterOnly, outputItemID)
-	local playerFullName = GetPlayerFullName()
+	local characterKey = GetPlayerCharacterKey()
 	local cacheKey = currentCharacterOnly and "character" or "factionrealm"
 	local cached = recipeIndexes[cacheKey]
 	if outputItemID and (not cached or not cached.recipesByOutput[outputItemID]) then
@@ -438,7 +439,7 @@ local function BuildRecipeIndex(currentCharacterOnly, outputItemID)
 	local recipesBySpell = {}
 	local recipesByOutput = {}
 	for characterName, professions in pairs(addon.db.factionrealm.knownProfessions) do
-		if not currentCharacterOnly or characterName == playerFullName then
+		if not currentCharacterOnly or characterName == characterKey then
 			for _, profession in pairs(professions) do
 				for recipeKey, recipe in pairs(profession.recipes or {}) do
 					local spellID = recipe.spellID
@@ -535,8 +536,8 @@ local function Calculate(auctionDB, currentCharacterOnly, outputItemID, allowMas
 			}
 		end
 		local vellumItemIDs
-		if isWrath and enchantingData then
-			vellumItemIDs = select(2, enchantingData:GetEnchant(entry.spellID))
+		if isWrath and enchantingScrollData then
+			vellumItemIDs = select(2, enchantingScrollData:GetEnchant(entry.spellID))
 		end
 		if vellumItemIDs then
 			local cheapest
@@ -664,7 +665,7 @@ local function Calculate(auctionDB, currentCharacterOnly, outputItemID, allowMas
 end
 
 function module:GetCharacterName()
-	return GetPlayerFullName()
+	return GetPlayerCharacterKey()
 end
 
 function module:IsItemKnown(itemID, currentCharacterOnly)
@@ -681,11 +682,11 @@ local function GetKnownRecipeSpellID(name)
 	if not name then
 		return
 	end
-	local playerFullName = GetPlayerFullName()
-	if not playerFullName then
+	local characterKey = GetPlayerCharacterKey()
+	if not characterKey then
 		return
 	end
-	local professions = addon.db.factionrealm.knownProfessions[playerFullName]
+	local professions = addon.db.factionrealm.knownProfessions[characterKey]
 	if not professions then
 		return
 	end

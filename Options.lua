@@ -5,6 +5,9 @@ local AUCTIONS = AUCTIONS
 local BIDS = BIDS
 local BROWSE = BROWSE
 local CTRL_KEY = CTRL_KEY
+local FACTION_ALLIANCE = FACTION_ALLIANCE
+local FACTION_HORDE = FACTION_HORDE
+local FACTION_NEUTRAL = FACTION_NEUTRAL
 local floor = math.floor
 local format = string.format
 local GENERAL_LABEL = GENERAL_LABEL
@@ -14,10 +17,14 @@ local LOCK = LOCK
 local MINIMAP_LABEL = MINIMAP_LABEL
 local SELL_PRICE = SELL_PRICE
 local SHIFT_KEY = SHIFT_KEY
+local UnitFactionGroup = UnitFactionGroup
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 local LibDBIcon = LibStub("LibDBIcon-1.0")
+local playerFaction = UnitFactionGroup("player")
+local currentFactionLabel = playerFaction == "Alliance" and FACTION_ALLIANCE or FACTION_HORDE
+local oppositeFactionLabel = playerFaction == "Alliance" and FACTION_HORDE or FACTION_ALLIANCE
 
 local function GetRoundedMinimapPosition(value)
 	if addon.db.global.minimap.lockOnDegree then
@@ -90,46 +97,56 @@ function addon:GetOptions()
 							addon:GetModule("VendorFlipTracking"):RefreshDisplay()
 						end
 					},
-					factionrealm = {
+					synchronization = {
 						order = 30,
-						type = "toggle",
-						width = "relative",
-						relWidth = 0.5,
-						name = L["Synchronize faction auction data"],
-						desc = L["Send and receive auction data for the current character's faction."],
-						get = function()
-							return addon.db.profile.sendAndReceiveFactionRealm
-						end,
-						set = function(_, value)
-							addon.db.profile.sendAndReceiveFactionRealm = value
-						end
-					},
-					oppositeFaction = {
-						order = 40,
-						type = "toggle",
-						width = "relative",
-						relWidth = 0.5,
-						name = L["Synchronize opposite-faction auction data"],
-						desc = L["Send and receive opposite-faction auction-house data without combining it with current-faction or neutral data."],
-						get = function()
-							return addon.db.profile.sendAndReceiveOppositeFaction
-						end,
-						set = function(_, value)
-							addon.db.profile.sendAndReceiveOppositeFaction = value
-						end
-					},
-					neutral = {
-						order = 50,
-						type = "toggle",
+						type = "group",
+						inline = true,
 						width = "full",
-						name = L["Synchronize neutral auction data"],
-						desc = L["Send and receive neutral auction-house data without combining it with faction data."],
-						get = function()
-							return addon.db.profile.sendAndReceiveRealm
+						name = L["Auction data synchronization"],
+						get = function(info)
+							return addon.db.profile.synchronization[info[#info]]
 						end,
-						set = function(_, value)
-							addon.db.profile.sendAndReceiveRealm = value
-						end
+						set = function(info, value)
+							addon.db.profile.synchronization[info[#info]] = value
+						end,
+						args = {
+							shared = {
+								order = 10,
+								type = "toggle",
+								width = "relative",
+								relWidth = 0.3,
+								name = L["Shared auction house"],
+								desc = L["Send and receive shared auction-house data with guild members on the same or a connected realm."],
+								hidden = not addon.UsesSharedAuctionHouse
+							},
+							currentFaction = {
+								order = 20,
+								type = "toggle",
+								width = "relative",
+								relWidth = 0.3,
+								name = currentFactionLabel,
+								desc = L["Send and receive current-faction auction data with guild members on the same or a connected realm."],
+								hidden = addon.UsesSharedAuctionHouse
+							},
+							oppositeFaction = {
+								order = 30,
+								type = "toggle",
+								width = "relative",
+								relWidth = 0.3,
+								name = oppositeFactionLabel,
+								desc = L["Send and receive opposite-faction auction data with guild members on the same or a connected realm."],
+								hidden = addon.UsesSharedAuctionHouse
+							},
+							neutral = {
+								order = 40,
+								type = "toggle",
+								width = "relative",
+								relWidth = 0.3,
+								name = FACTION_NEUTRAL,
+								desc = L["Send and receive neutral auction-house data with guild members on the same or a connected realm."],
+								hidden = addon.UsesSharedAuctionHouse
+							}
+						}
 					},
 					formatLargeNumbers = {
 						order = 60,
@@ -192,12 +209,14 @@ function addon:GetOptions()
 						order = 10,
 						type = "description",
 						name = "* " .. format(L["Hold %s while viewing an item tooltip to show neutral auction-house data."], ALT_KEY),
+						hidden = addon.UsesSharedAuctionHouse,
 						width = "full"
 					},
 					oppositeFactionModifier = {
 						order = 20,
 						type = "description",
 						name = "* " .. format(L["Hold %s while viewing an item tooltip to show opposite-faction auction-house data."], CTRL_KEY),
+						hidden = addon.UsesSharedAuctionHouse,
 						width = "full"
 					},
 					stackModifier = {
@@ -210,6 +229,7 @@ function addon:GetOptions()
 						order = 40,
 						type = "description",
 						name = "* " .. format(L["Holding %s + %s always shows neutral auction-house data."], CTRL_KEY, ALT_KEY),
+						hidden = addon.UsesSharedAuctionHouse,
 						width = "full"
 					},
 					trendDisplay = {

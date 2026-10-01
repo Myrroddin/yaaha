@@ -1,5 +1,8 @@
+-- Restores, compresses, and saves auction databases while managing opposite-faction storage.
+
 local C_AutoComplete = C_AutoComplete
 local C_EncodingUtil = C_EncodingUtil
+local AUCTION_HOUSE = AUCTION_HOUSE
 local Enum = Enum
 local FACTION_ALLIANCE = FACTION_ALLIANCE
 local FACTION_HORDE = FACTION_HORDE
@@ -36,13 +39,12 @@ local SCOPES = { "factionrealm", "realm" }
 local function InitializeFactionScope(scopeDB)
 	scopeDB.auctionDB = scopeDB.auctionDB or {}
 	scopeDB.auctionStats = scopeDB.auctionStats or {}
-	scopeDB.personalSales = scopeDB.personalSales or {}
-	scopeDB.realmSales = scopeDB.realmSales or {}
 	return scopeDB
 end
 
 local function ScopeName(scope)
-	return scope == "realm" and FACTION_NEUTRAL
+	return addon.UsesSharedAuctionHouse and AUCTION_HOUSE
+		or scope == "realm" and FACTION_NEUTRAL
 		or localizedPlayerFaction or playerFaction
 end
 
@@ -141,7 +143,7 @@ local function LoadOppositeFactionData()
 		else
 			auctionDB, restoredPayload = DecodeStoredAuctionDB(scopeDB.compressedAuctionDB)
 		end
-		if auctionDB and (next(auctionDB) or next(scopeDB.realmSales or {})
+		if auctionDB and (next(auctionDB)
 			or scopeDB.auctionStats and scopeDB.auctionStats.lastScan) then
 			oppositeFactionKey = candidates[index].key
 			oppositeFactionData = InitializeFactionScope(scopeDB)

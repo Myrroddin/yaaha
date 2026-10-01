@@ -1,3 +1,5 @@
+-- Defines disenchanting eligibility, result ranges, learned observations, and expected values.
+
 local C_Item = C_Item
 local format = string.format
 local LibStub = LibStub

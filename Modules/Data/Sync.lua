@@ -1,9 +1,15 @@
+-- Exchanges normalized auction snapshots and realm-sale observations only with
+-- guild members who share the same auction house through a Connected Realm group.
+
+local C_AutoComplete = C_AutoComplete
 local C_EncodingUtil = C_EncodingUtil
 local C_Timer = C_Timer
+local AUCTION_HOUSE = AUCTION_HOUSE
 local Enum = Enum
 local FACTION_ALLIANCE = FACTION_ALLIANCE
 local FACTION_HORDE = FACTION_HORDE
 local FACTION_NEUTRAL = FACTION_NEUTRAL
+local GetNormalizedRealmName = GetNormalizedRealmName
 local GetServerTime = GetServerTime
 local IsInGuild = IsInGuild
 local IsInInstance = IsInInstance
@@ -15,6 +21,8 @@ local pairs = pairs
 local pcall = pcall
 local random = math.random
 local sort = table.sort
+local stringGsub = string.gsub
+local stringLower = string.lower
 local tableConcat = table.concat
 local tableRemove = table.remove
 local type = type
@@ -29,14 +37,19 @@ local storage
 
 local COMM_PREFIX = "YAAHA1"
 local PROTOCOL_VERSION = 1
+local SYNC_DISTRIBUTION = "GUILD"
 local INITIAL_PULL_DELAY = 60
 local SECONDS_PER_DAY = 24 * 60 * 60
 local MAX_HISTORY_SECONDS = 60 * SECONDS_PER_DAY
 local playerFaction = UnitFactionGroup("player")
-local playerName, playerRealm, playerFullName
+local playerName, playerFullName
 local BASE64_VARIANT = Enum.Base64Variant.StandardUrlSafe
 local oppositeFaction = playerFaction == "Alliance" and "Horde" or "Alliance"
-local AUCTION_HOUSE_TYPES = { "Alliance", "Horde", "Neutral" }
+-- Sync transports YAAHA's normalized data rather than Blizzard auction results.
+-- The wire key names the actual market. Faction-separated clients retain three
+-- markets, while Mists and Retail normalize every request to their shared house.
+local AUCTION_HOUSE_TYPES = addon.UsesSharedAuctionHouse
+	and { "Shared" } or { "Alliance", "Horde", "Neutral" }
 local SYNC_MARKET_FIELDS = {
 	"auctionCount",
 	"auctionQuantity",
@@ -47,15 +60,22 @@ local SYNC_MARKET_FIELDS = {
 }
 local pendingPulls = {}
 local seenPulls = {}
+local connectedRealmKey
 
 local function IsSelf(sender)
-	return sender == playerName or sender == playerFullName
+	local normalizedSender = addon:NormalizeCharacterName(sender)
+	return normalizedSender == playerFullName
+		or not addon.IsForever and sender == playerName
 end
 
 local function ScopeEnabled(auctionHouseType)
-	return auctionHouseType == playerFaction and addon.db.profile.sendAndReceiveFactionRealm
-		or auctionHouseType == oppositeFaction and addon.db.profile.sendAndReceiveOppositeFaction
-		or auctionHouseType == "Neutral" and addon.db.profile.sendAndReceiveRealm
+	local synchronization = addon.db.profile.synchronization
+	if addon.UsesSharedAuctionHouse then
+		return auctionHouseType == "Shared" and synchronization.shared
+	end
+	return auctionHouseType == playerFaction and synchronization.currentFaction
+		or auctionHouseType == oppositeFaction and synchronization.oppositeFaction
+		or auctionHouseType == "Neutral" and synchronization.neutral
 end
 
 -- Wire scopes name the auction house itself, never its relationship to the
@@ -63,7 +83,9 @@ end
 -- Alliance character sends it. Only this function maps that stable identity to
 -- the current character's AceDB scopes.
 local function GetScopeDB(auctionHouseType, create)
-	if auctionHouseType == playerFaction then
+	if addon.UsesSharedAuctionHouse and auctionHouseType == "Shared" then
+		return addon.db.realm, "realm"
+	elseif auctionHouseType == playerFaction then
 		return addon.db.factionrealm, "factionrealm"
 	elseif auctionHouseType == "Neutral" then
 		return addon.db.realm, "realm"
@@ -76,17 +98,67 @@ local function GetScopeDB(auctionHouseType, create)
 end
 
 local function AnySyncEnabled()
-	return addon.db.profile.sendAndReceiveFactionRealm
-		or addon.db.profile.sendAndReceiveOppositeFaction
-		or addon.db.profile.sendAndReceiveRealm
+	local synchronization = addon.db.profile.synchronization
+	if addon.UsesSharedAuctionHouse then
+		return synchronization.shared
+	end
+	return synchronization.currentFaction
+		or synchronization.oppositeFaction
+		or synchronization.neutral
 end
 
 local function CanSyncNow()
-	return AnySyncEnabled() and not IsInInstance()
+	return AnySyncEnabled() and IsInGuild() and not IsInInstance()
+end
+
+local function NormalizeRealmName(realm)
+	return type(realm) == "string" and realm ~= ""
+		and stringLower(stringGsub(realm, "[%s%-%.]", "")) or nil
+end
+
+-- Every member of a Connected Realm group sees the same auction house. Sorting
+-- the normalized current and connected realm names produces the same wire key
+-- from any realm in that group without maintaining a static realm database.
+local function GetConnectedRealmKey()
+	if connectedRealmKey then
+		return connectedRealmKey
+	end
+	local realmSet = {}
+	local realms = {}
+	local function AddRealm(realm)
+		realm = NormalizeRealmName(realm)
+		if realm and not realmSet[realm] then
+			realmSet[realm] = true
+			realms[#realms + 1] = realm
+		end
+	end
+
+	AddRealm(GetNormalizedRealmName())
+	local succeeded, connectedRealms = pcall(C_AutoComplete.GetAutoCompleteRealms)
+	if succeeded and type(connectedRealms) == "table" then
+		for index = 1, #connectedRealms do
+			AddRealm(connectedRealms[index])
+		end
+	end
+	if #realms == 0 then
+		return
+	end
+	sort(realms)
+	connectedRealmKey = tableConcat(realms, "\031")
+	return connectedRealmKey
 end
 
 local function EncodePacket(kind, data)
-	local serialized = addon:Serialize({ version = PROTOCOL_VERSION, kind = kind, data = data })
+	local realmGroup = GetConnectedRealmKey()
+	if not realmGroup then
+		return
+	end
+	local serialized = addon:Serialize({
+		version = PROTOCOL_VERSION,
+		kind = kind,
+		realmGroup = realmGroup,
+		data = data,
+	})
 	local compressed = C_EncodingUtil.CompressString(serialized)
 	return C_EncodingUtil.EncodeBase64(compressed, BASE64_VARIANT)
 end
@@ -99,14 +171,18 @@ local function DecodePacket(text)
 	local decompressed = C_EncodingUtil.DecompressString(decoded)
 	local success, packet = addon:Deserialize(decompressed)
 	if success and type(packet) == "table" and packet.version == PROTOCOL_VERSION
+		and packet.realmGroup == GetConnectedRealmKey()
 		and type(packet.kind) == "string" and type(packet.data) == "table" then
 		return packet
 	end
 end
 
-local function SendPacket(kind, data, distribution, target, priority)
-	addon:SendCommMessage(COMM_PREFIX, EncodePacket(kind, data), distribution, target,
-		priority or "BULK")
+local function SendPacket(kind, data, priority)
+	local encoded = EncodePacket(kind, data)
+	if encoded then
+		addon:SendCommMessage(COMM_PREFIX, encoded, SYNC_DISTRIBUTION, nil,
+			priority or "BULK")
+	end
 end
 
 local function GetSaleIDs(saleData)
@@ -128,7 +204,7 @@ local function StatsSignature(stats)
 		and stats.lastScan .. ":" .. (stats.totalListings or 0) .. ":" .. (stats.totalItems or 0) or nil
 end
 
-local function BuildScopeSummary(scopeDB)
+local function BuildScopeSummary(scopeDB, realmSales)
 	local now = GetServerTime()
 	local summary = {
 		historyCount = 0,
@@ -162,7 +238,7 @@ local function BuildScopeSummary(scopeDB)
 			end
 		end
 	end
-	for itemID, saleData in pairs(scopeDB.realmSales) do
+	for itemID, saleData in pairs(realmSales) do
 		for index = 1, #(saleData.observations or {}) do
 			local observation = saleData.observations[index]
 			if observation.timestamp and now - observation.timestamp < SECONDS_PER_DAY then
@@ -200,9 +276,12 @@ local function BuildAdvertisement()
 	for index = 1, #AUCTION_HOUSE_TYPES do
 		local auctionHouseType = AUCTION_HOUSE_TYPES[index]
 		local scopeDB = ScopeEnabled(auctionHouseType) and GetScopeDB(auctionHouseType)
-		if scopeDB and (next(scopeDB.auctionDB) or next(scopeDB.realmSales)
-			or StatsSignature(scopeDB.auctionStats)) then
-			scopes[auctionHouseType] = BuildScopeSummary(scopeDB)
+		if scopeDB then
+			local realmSales = addon:GetRealmSales(auctionHouseType)
+			if next(scopeDB.auctionDB) or next(realmSales)
+				or StatsSignature(scopeDB.auctionStats) then
+				scopes[auctionHouseType] = BuildScopeSummary(scopeDB, realmSales)
+			end
 		end
 	end
 	return scopes
@@ -268,6 +347,7 @@ local function BuildPush(scopeFilter, fullHistory)
 		local scopeDB = (not scopeFilter or scopeFilter[auctionHouseType])
 			and ScopeEnabled(auctionHouseType) and GetScopeDB(auctionHouseType)
 		if scopeDB then
+			local realmSales = addon:GetRealmSales(auctionHouseType)
 			local market = {}
 			for itemID, itemData in pairs(scopeDB.auctionDB) do
 				local delta = CopyMarketSnapshot(itemData, fullHistory)
@@ -276,15 +356,15 @@ local function BuildPush(scopeFilter, fullHistory)
 				end
 			end
 			local sales = {}
-			for itemID, saleData in pairs(scopeDB.realmSales) do
+			for itemID, saleData in pairs(realmSales) do
 				local delta = CopySaleDelta(saleData, GetSaleIDs(saleData))
 				if delta then
 					sales[itemID] = delta
 				end
 			end
 			local stats = StatsSignature(scopeDB.auctionStats) and scopeDB.auctionStats or nil
-			-- A pushed snapshot may relay separately stored opposite-faction data,
-			-- but the stable auction-house key keeps all three markets isolated.
+			-- A pushed snapshot may relay separately stored market data, but its
+			-- stable auction-house key preserves the client's actual market boundary.
 			if next(market) or next(sales) or stats then
 				scopes[auctionHouseType] = {
 					market = market,
@@ -297,7 +377,7 @@ local function BuildPush(scopeFilter, fullHistory)
 	return { faction = playerFaction, scopes = scopes }
 end
 
-local function MergeSaleObservation(scopeDB, itemID, incoming)
+local function MergeSaleObservation(realmSales, itemID, incoming)
 	if type(incoming) ~= "table" or type(incoming.syncID) ~= "string"
 		or type(incoming.timestamp) ~= "number"
 		or type(incoming.transactionKey) ~= "string"
@@ -313,7 +393,6 @@ local function MergeSaleObservation(scopeDB, itemID, incoming)
 		or GetServerTime() - incoming.timestamp >= SECONDS_PER_DAY then
 		return false
 	end
-	local realmSales = scopeDB.realmSales
 	local data = realmSales[itemID]
 	if not data then
 		data = { observations = {} }
@@ -379,6 +458,7 @@ local function MergeDelta(delta)
 			scopeDB, scope = GetScopeDB(auctionHouseType, true)
 		end
 		if scopeDB and type(incoming) == "table" then
+			local realmSales = addon:GetRealmSales(auctionHouseType)
 			local received = false
 			local incomingStats = incoming.stats
 			if type(incomingStats) == "table" and type(incomingStats.lastScan) == "number"
@@ -425,7 +505,7 @@ local function MergeDelta(delta)
 					local observations = type(saleData.observations) == "table"
 						and saleData.observations or {}
 					for index = 1, #observations do
-						if MergeSaleObservation(scopeDB, itemID, observations[index]) then
+						if MergeSaleObservation(realmSales, itemID, observations[index]) then
 							received = true
 						end
 					end
@@ -434,7 +514,8 @@ local function MergeDelta(delta)
 			if received then
 				receivedScopes[auctionHouseType] = true
 				addon:Printf(L["Received auction data for the %s auction house."],
-					auctionHouseType == "Neutral" and FACTION_NEUTRAL
+					auctionHouseType == "Shared" and AUCTION_HOUSE
+						or auctionHouseType == "Neutral" and FACTION_NEUTRAL
 						or auctionHouseType == "Alliance" and FACTION_ALLIANCE or FACTION_HORDE)
 				addon:FireAPIEvent("AUCTION_HOUSE_DATA_UPDATED",
 					auctionHouseType, "sync")
@@ -444,15 +525,13 @@ local function MergeDelta(delta)
 	return receivedScopes
 end
 
-local function SendPush(distribution, push, encoded, kind)
+local function SendPush(push, kind)
 	if not CanSyncNow() then
 		return
 	end
 	push = push or BuildPush()
 	if next(push.scopes) then
-		encoded = encoded or EncodePacket(kind or "PUSH", push)
-		addon:SendCommMessage(COMM_PREFIX, encoded, distribution, nil, "BULK")
-		return encoded
+		SendPacket(kind or "PUSH", push)
 	end
 end
 
@@ -470,12 +549,12 @@ local function CompletePull(requestID)
 		filters[auctionHouseType] = true
 	end
 	-- Keep each auction house in its own multipart stream. A character may retain
-	-- substantial data for all three markets, while the decoder's safety limit and
+	-- substantial data for several markets, while the decoder's safety limit and
 	-- an interrupted transmission should affect only one isolated partition.
 	for auctionHouseType in pairs(filters) do
 		local push = BuildPush({ [auctionHouseType] = true }, true)
 		push.requestID = requestID
-		SendPush(pending.distribution, push, nil, "RETURN")
+		SendPush(push, "RETURN")
 	end
 	if pending.timer then
 		pending.timer:Cancel()
@@ -492,7 +571,8 @@ local function FinishPull(requestID)
 	for index = 1, #AUCTION_HOUSE_TYPES do
 		local auctionHouseType = AUCTION_HOUSE_TYPES[index]
 		local scopeDB = ScopeEnabled(auctionHouseType) and GetScopeDB(auctionHouseType)
-		local localSummary = scopeDB and BuildScopeSummary(scopeDB) or nil
+		local realmSales = addon:GetRealmSales(auctionHouseType)
+		local localSummary = scopeDB and BuildScopeSummary(scopeDB, realmSales) or nil
 		local localSignature = SummarySignature(localSummary)
 		local selectedSignatures = {}
 		for sender, advertisement in pairs(pending.advertisements) do
@@ -510,7 +590,7 @@ local function FinishPull(requestID)
 		SendPacket("REQUEST", {
 			requestID = requestID,
 			selections = selections,
-		}, pending.distribution, nil, "NORMAL")
+		}, "NORMAL")
 		-- BULK auction histories can take substantially longer than an ordinary addon
 		-- message. Keep reconciliation state for an hour so a valid slow transfer can
 		-- still publish its merged union; logging out naturally discards this state.
@@ -522,7 +602,7 @@ local function FinishPull(requestID)
 	end
 end
 
-local function RequestPush(distribution)
+local function RequestPush()
 	if CanSyncNow() then
 		addon.db.char.syncSequence = (addon.db.char.syncSequence or 0) + 1
 		local requestID = tableConcat({
@@ -532,17 +612,15 @@ local function RequestPush(distribution)
 		}, ":")
 		pendingPulls[requestID] = {
 			advertisements = {},
-			distribution = distribution,
 		}
 		pendingPulls[requestID].timer = C_Timer.NewTimer(5, function()
 			FinishPull(requestID)
 		end)
-		SendPacket("PULL", { faction = playerFaction, requestID = requestID },
-			distribution, nil, "NORMAL")
+		SendPacket("PULL", { faction = playerFaction, requestID = requestID }, "NORMAL")
 	end
 end
 
-local function ScheduleAdvertisement(distribution, sender, requestID)
+local function ScheduleAdvertisement(sender, requestID)
 	if type(requestID) ~= "string" or seenPulls[requestID] then
 		return
 	end
@@ -556,15 +634,15 @@ local function ScheduleAdvertisement(distribution, sender, requestID)
 		local scopes = BuildAdvertisement()
 		if next(scopes) then
 			SendPacket("ADVERTISE", {
-				requestID = requestID,
-				scopes = scopes,
-				target = sender,
-			}, distribution, nil, "NORMAL")
+			requestID = requestID,
+			scopes = scopes,
+			target = sender,
+		}, "NORMAL")
 		end
 	end)
 end
 
-local function SendRequestedPush(distribution, sender, data)
+local function SendRequestedPush(sender, data)
 	local filters = {}
 	local selections = type(data.selections) == "table" and data.selections or {}
 	for auctionHouseType, selectedSenders in pairs(selections) do
@@ -584,7 +662,7 @@ local function SendRequestedPush(distribution, sender, data)
 		local push = BuildPush({ [auctionHouseType] = true }, true)
 		push.requestID = data.requestID
 		push.target = sender
-		SendPush(distribution, push)
+		SendPush(push)
 	end
 end
 
@@ -613,9 +691,9 @@ local function ReturnMergedPush(sender, data)
 end
 
 function module:OnCommReceived(_, text, distribution, sender)
-	-- Same-realm callbacks may use the short name while cross-realm callbacks use
-	-- name-realm. Exact comparisons avoid rejecting an unrelated namesake.
-	if IsSelf(sender) then
+	-- Existing clients can use a short same-realm name. Forever requires its full,
+	-- link-form firstName-surname identity because first names are not unique.
+	if distribution ~= SYNC_DISTRIBUTION or IsSelf(sender) then
 		return
 	end
 	if not CanSyncNow() then
@@ -630,15 +708,15 @@ function module:OnCommReceived(_, text, distribution, sender)
 	saleCollector:PruneRealmSales()
 
 	if packet.kind == "PULL" then
-		ScheduleAdvertisement(distribution, sender, packet.data.requestID)
+		ScheduleAdvertisement(sender, packet.data.requestID)
 	elseif packet.kind == "ADVERTISE" then
 		local pending = type(packet.data.requestID) == "string"
 			and IsSelf(packet.data.target) and pendingPulls[packet.data.requestID]
-		if pending and pending.distribution == distribution and type(packet.data.scopes) == "table" then
+		if pending and type(packet.data.scopes) == "table" then
 			pending.advertisements[sender] = packet.data.scopes
 		end
 	elseif packet.kind == "REQUEST" then
-		SendRequestedPush(distribution, sender, packet.data)
+		SendRequestedPush(sender, packet.data)
 	elseif packet.kind == "PUSH" then
 		MergeDelta(packet.data)
 		ReturnMergedPush(sender, packet.data)
@@ -656,11 +734,7 @@ function module:YAAHA_SCAN_PROCESSED()
 	for index = 1, #AUCTION_HOUSE_TYPES do
 		local auctionHouseType = AUCTION_HOUSE_TYPES[index]
 		local push = BuildPush({ [auctionHouseType] = true })
-		local encoded
-		if IsInGuild() then
-			encoded = SendPush("GUILD", push)
-		end
-		SendPush("YELL", push, encoded)
+		SendPush(push)
 	end
 end
 
@@ -679,15 +753,15 @@ function module:PLAYER_ENTERING_WORLD(_, isInitialLogin)
 		if not CanSyncNow() then
 			return
 		end
-		if IsInGuild() then
-			RequestPush("GUILD")
-		end
-		RequestPush("YELL")
+		RequestPush()
 	end)
 end
 
 function module:OnEnable()
-	playerName, playerRealm, playerFullName = addon:GetPlayerIdentity()
+	if #AUCTION_HOUSE_TYPES == 0 then
+		return
+	end
+	playerName, _, playerFullName = addon:GetPlayerIdentity()
 	addon:RegisterComm(COMM_PREFIX, function(...)
 		module:OnCommReceived(...)
 	end)

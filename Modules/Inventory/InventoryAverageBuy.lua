@@ -1,3 +1,5 @@
+-- Maintains FIFO purchase lots and calculates the average paid cost of owned inventory.
+
 local BANK_CONTAINER = BANK_CONTAINER
 local C_Container = C_Container
 local C_Item = C_Item

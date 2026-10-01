@@ -15,7 +15,6 @@ YAAHA exposes a small public API for other World of Warcraft addons through the 
   - [`GetItemData(itemID, auctionHouseType)`](#getitemdataitemid-auctionhousetype)
   - [Item-data wrappers](#item-data-wrappers)
   - [`GetAuctionHouseStats(auctionHouseType)`](#getauctionhousestatsauctionhousetype)
-  - [`GetVendorFlipProfit()`](#getvendorflipprofit)
   - [Realm-data functions](#realm-data-functions)
   - [Disenchanting functions](#disenchanting-functions)
   - [Crafting functions](#crafting-functions)
@@ -103,14 +102,14 @@ if data then
 end
 ```
 
-The returned table is a new snapshot. Changing it does not alter YAAHA's saved data. Raw price observations, personal sale rates, and other internal processing data are intentionally not exposed.
+The returned table is a new snapshot. Changing it does not alter YAAHA's saved data. Raw price observations, personal sale rates, vendor-flip activity, and other private or internal processing data are intentionally not exposed.
 
 Arguments
 
 | Value | Type | Description |
 | --- | --- | --- |
 | `itemID` | `number` | A positive integer item ID. |
-| `auctionHouseType` | `string` or `nil` | Optional. Exactly `"Alliance"`, `"Horde"`, or `"Neutral"`; omitted or `nil` uses the current character's faction auction house. |
+| `auctionHouseType` | `string` or `nil` | Optional. Uses the client-specific rules described under [Auction-house types](#auction-house-types). |
 
 Returns
 
@@ -184,23 +183,9 @@ The returned `YAAHA_API.AuctionHouseStats` table is a defensive snapshot with th
 
 The optional `auctionHouseType` follows the same rules as `GetItemData()`. The function returns `nil` when the request is invalid or no completed snapshot is available.
 
-### `GetVendorFlipProfit()`
-
-Returns the running vendor-flip profit for the current realm in copper.
-
-```lua
-local profit = YAAHA_API.GetVendorFlipProfit()
-```
-
-The value includes only purchases attributed to YAAHA's vendor-deal feature and
-their recognized proceeds. It can be negative, positive, or zero, and begins
-again at zero when the user resets the tracker. Unlike other monetary API
-values, zero is meaningful and is therefore returned rather than converted to
-`nil`.
-
 ### Realm-data functions
 
-Realm statistics are intentionally exposed one value at a time. They are not included in the table returned by `GetItemData()`, and YAAHA's private `personalSaleRate` is never returned by the public API.
+Realm statistics are intentionally exposed one value at a time. They are not included in the table returned by `GetItemData()`, and YAAHA's private, realm-wide personal sale rate is never returned by the public API.
 
 Each function accepts `(itemID, auctionHouseType)` using the same validation, optional faction default, and auction-house separation as `GetItemData()`.
 
@@ -210,7 +195,7 @@ Each function accepts `(itemID, auctionHouseType)` using the same validation, op
 | `GetRealmSoldPerDay()` | `number` or `nil` | Number of individual items sold during the current rolling 24-hour realm-data window. |
 | `GetRealmAverageSaleValue()` | `number` or `nil` | Average gross per-unit auction sale value in copper during the current rolling 24-hour realm-data window. |
 
-Realm data expires 24 hours after its newest qualifying observation. These functions return `nil` when the requested value is unavailable or expired. A known current sale rate or sold quantity may validly be zero.
+Realm data expires 24 hours after each qualifying observation. Faction-separated clients keep Alliance, Horde, and Neutral observations isolated. Mists and Retail use their single shared market. These functions return `nil` when the requested value is unavailable or expired. A known current sale rate or sold quantity may validly be zero.
 
 ### Disenchanting functions
 
@@ -308,7 +293,7 @@ end
 
 For every reagent, YAAHA independently considers its first positive market value, unlimited-vendor price, conversion value, and recursively calculated crafting value. The least expensive available source is used. Conversion values use the converted source material's market value; they do not recursively reuse its vendor or crafting value.
 
-In Burning Crusade and Wrath/Titan, a recipe covered by the recorded alchemist's Potion, Elixir, or Transmutation mastery has an expected finished-item auction-return multiplier of `1.2`. Mastery does not change the recipe's required reagents, its crafting cost, or the cost of that item when it is used as a reagent in another recipe. It applies only when estimating the matching finished recipe's return on the current faction's auction house; Neutral and opposite-faction requests use the baseline return.
+In Burning Crusade and Wrath/Titan, a recipe covered by the recorded alchemist's Potion, Elixir, or Transmutation mastery has an expected finished-item auction-return multiplier of `1.2`. Mastery does not change the recipe's required reagents, its crafting cost, or the cost of that item when it is used as a reagent in another recipe. It applies only when estimating the matching finished recipe's return in a market where that character can sell directly. Neutral and opposite-faction requests on faction-separated clients use the baseline return.
 
 In Wrath/Titan, an equipment-enchant result represents its auctionable scroll. Its crafting value includes the cheapest compatible armor or weapon vellum available through the same material-cost calculation. Classic Era and Burning Crusade equipment enchants retain their reagent cost but have no auctionable output item.
 
@@ -324,7 +309,7 @@ When `fullResults` is true, the returned `YAAHA_API.CraftingResult` is a defensi
 | `totalReagentValue` | `number` | Total reagent value for one recipe cast. |
 | `outputQuantity` | `number` | Fixed output or average of the minimum and maximum output. |
 | `masteryYield` | `number` | Expected finished-item auction-return multiplier; `1` normally or `1.2` for a matching Alchemy mastery. It does not reduce crafting or material costs. |
-| `character` | `string` | Character whose known recipe supplied the result. |
+| `character` | `string` | Canonical character identity whose known recipe supplied the result (`name-realm` or Forever's `firstName-surname`). |
 | `profession` | `string` | Localized profession name. |
 | `stale` | `boolean` | Whether the profession snapshot predates the current game-client build. |
 | `spellID` | `number` | Recipe spell ID. |
@@ -368,7 +353,7 @@ Fires once for each auction-house database which actually changed, after YAAHA h
 | Callback value | Type | Description |
 | --- | --- | --- |
 | `event` | `string` | Always `"AUCTION_HOUSE_DATA_UPDATED"`. |
-| `auctionHouseType` | `string` | Exactly `"Alliance"`, `"Horde"`, or `"Neutral"`. |
+| `auctionHouseType` | `string` | `"Alliance"`, `"Horde"`, or `"Neutral"` on faction-separated clients; `"Shared"` on clients with one shared auction house. |
 | `source` | `string` | `"scan"` for a completed local scan or `"sync"` for newly merged synchronized data. |
 
 A synchronized packet which contains no newer or otherwise missing data does not fire the callback. Callback recipients may query any public API function immediately; they never observe a partially processed scan or merge.
@@ -389,7 +374,11 @@ They are not object methods and should not be called with a colon.
 
 ### Auction-house types
 
-Omitting `auctionHouseType`, or passing `nil`, accesses the current character's faction auction-house database. Explicit `"Alliance"`, `"Horde"`, and `"Neutral"` values access only their corresponding databases. Opposite-faction data is available when YAAHA has received or recorded it. YAAHA never substitutes or combines another auction-house type.
+On Classic Era, Burning Crusade, Wrath/Titan, and Forever, omitting `auctionHouseType` or passing `nil` accesses the current character's faction auction-house database. Explicit `"Alliance"`, `"Horde"`, and `"Neutral"` values access only their corresponding databases. Opposite-faction data is available when YAAHA has received or recorded it. YAAHA never substitutes or combines another market on these clients.
+
+Mists and Retail have one shared auction house rather than separate faction and neutral markets. On those clients, omitting the argument or passing `"Alliance"`, `"Horde"`, `"Neutral"`, or `"Shared"` accesses that same shared database. Callbacks identify it as `"Shared"`. Other strings are invalid on every client.
+
+Some modern commodities are traded across a region, but YAAHA has no external service which aggregates region-wide sales. Its public values remain the data visible through the local auction house and YAAHA's realm-derived sale observations; the API does not claim to provide region-wide statistics.
 
 ### Unavailable data
 
@@ -423,4 +412,4 @@ nil  → nil
 1.50 → 2
 ```
 
-Negative monetary values are invalid and are not returned, except from `GetVendorFlipProfit()`, where a negative running balance is meaningful.
+Negative monetary values are invalid and are not returned.

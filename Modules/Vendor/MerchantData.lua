@@ -1,3 +1,5 @@
+-- Records per-unit prices for unlimited-supply items sold by NPC merchants.
+
 local ceil = math.ceil
 local GetMerchantItemInfo = GetMerchantItemInfo
 local GetMerchantItemLink = GetMerchantItemLink

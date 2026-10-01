@@ -1,4 +1,5 @@
 local abs = math.abs
+local C_NameUtil = C_NameUtil
 local COPPER_AMOUNT_SYMBOL = COPPER_AMOUNT_SYMBOL
 local COPPER_AMOUNT_TEXTURE = COPPER_AMOUNT_TEXTURE
 local floor = math.floor
@@ -7,6 +8,8 @@ local FormatLargeNumber = FormatLargeNumber
 local GetNormalizedRealmName = GetNormalizedRealmName
 local GOLD_AMOUNT_SYMBOL = GOLD_AMOUNT_SYMBOL
 local GOLD_AMOUNT_TEXTURE = GOLD_AMOUNT_TEXTURE
+local LE_EXPANSION_CLASSIC = LE_EXPANSION_CLASSIC
+local LE_EXPANSION_LEVEL_CURRENT = LE_EXPANSION_LEVEL_CURRENT
 local LE_GAME_ERR_AUCTION_BID_OWN = LE_GAME_ERR_AUCTION_BID_OWN
 local LE_GAME_ERR_AUCTION_DATABASE_ERROR = LE_GAME_ERR_AUCTION_DATABASE_ERROR
 local LE_GAME_ERR_AUCTION_HIGHER_BID = LE_GAME_ERR_AUCTION_HIGHER_BID
@@ -14,6 +17,7 @@ local LE_GAME_ERR_ITEM_MAX_COUNT = LE_GAME_ERR_ITEM_MAX_COUNT
 local LE_GAME_ERR_ITEM_NOT_FOUND = LE_GAME_ERR_ITEM_NOT_FOUND
 local LE_GAME_ERR_NOT_ENOUGH_MONEY = LE_GAME_ERR_NOT_ENOUGH_MONEY
 local LibStub = LibStub
+local NameUtil = NameUtil
 local pairs = pairs
 local SILVER_AMOUNT_SYMBOL = SILVER_AMOUNT_SYMBOL
 local SILVER_AMOUNT_TEXTURE = SILVER_AMOUNT_TEXTURE
@@ -21,22 +25,43 @@ local stringMatch = string.match
 local stringSub = string.sub
 local tableConcat = table.concat
 local tonumber = tonumber
+local UnitFactionGroup = UnitFactionGroup
 local UnitFullName = UnitFullName
+local WOW_PROJECT_ID = WOW_PROJECT_ID
+local WOW_PROJECT_MAINLINE = WOW_PROJECT_MAINLINE
+local WOW_PROJECT_MISTS_CLASSIC = WOW_PROJECT_MISTS_CLASSIC
 
 ---@class YAAHA: AceAddon, AceComm-3.0, AceConsole-3.0, AceSerializer-3.0, LibAboutPanel-2.0
 ---@field db AceDBObject-3.0!
 ---@field brokerObject table?
 ---@field FireAPIEvent fun(self: YAAHA, event: string, ...)
+---@field GetCharacterKey fun(self: YAAHA): string?
+---@field GetAuctionHouseTypeForScope fun(self: YAAHA, scope: string?): string?
 ---@field GetFirstMarketValue fun(self: YAAHA, data: table?): number?, string?
 ---@field GetItemID fun(self: YAAHA, link: string?): integer?
 ---@field GetOptions fun(self: YAAHA): table
 ---@field GetPlayerIdentity fun(self: YAAHA): string?, string?, string?
+---@field GetRealmSales fun(self: YAAHA, auctionHouseType?: string): table, string
 ---@field IsAlt fun(self: YAAHA, name: string?, fullName?: string): boolean
 ---@field IsAuctionActionError fun(self: YAAHA, errorType: number): boolean
 ---@field IsDealProfitable fun(self: YAAHA, cost: number?, value: number?): boolean
+---@field IsForever boolean
+---@field UsesSharedAuctionHouse boolean
 ---@field IsPlayerAuction fun(self: YAAHA, owner: string?, ownerFullName?: string): boolean
+---@field NormalizeCharacterName fun(self: YAAHA, name: string?, secondName?: string): string?
 ---@field RefreshBrokerText fun(self: YAAHA)
 local addon = LibStub("AceAddon-3.0"):NewAddon("YAAHA", "AceComm-3.0", "AceConsole-3.0", "AceSerializer-3.0", "LibAboutPanel-2.0")
+
+---@flavor-narrows forever
+---@return boolean
+local function IsForever()
+	return (WOW_PROJECT_ID == WOW_PROJECT_MAINLINE) and (LE_EXPANSION_LEVEL_CURRENT == LE_EXPANSION_CLASSIC)
+end
+
+addon.IsForever = IsForever()
+addon.UsesSharedAuctionHouse = not addon.IsForever
+	and (WOW_PROJECT_ID == WOW_PROJECT_MAINLINE or WOW_PROJECT_ID == WOW_PROJECT_MISTS_CLASSIC)
+
 local AceConfigDialog = LibStub("AceConfigDialog-3.0")
 local LibDataBroker = LibStub("LibDataBroker-1.1")
 local LibDBIcon = LibStub("LibDBIcon-1.0")
@@ -75,8 +100,6 @@ local defaults = {
 		inventoryTransfers = {},
 		millingList = {},
 		prospectList = {},
-		personalSales = {},
-		realmSales = {},
 		vendorList = {},
 	},
 	global = {
@@ -104,9 +127,12 @@ local defaults = {
 		profitConsiderations = {
 			["*"] = true,
 		},
-		sendAndReceiveFactionRealm = true,
-		sendAndReceiveRealm = true,
-		sendAndReceiveOppositeFaction = true,
+		synchronization = {
+			currentFaction = true,
+			neutral = true,
+			oppositeFaction = true,
+			shared = true,
+		},
 		trendDisplay = "percent",
 		tooltip = {
 			["02-minBuyout"] = true,
@@ -123,16 +149,24 @@ local defaults = {
 		disenchantList = {},
 		millingList = {},
 		prospectList = {},
-		personalSales = {},
-		realmSales = {},
-		vendorFlipCOD = {},
-		vendorFlipInventory = {},
-		vendorFlipProfit = 0,
+		sales = {
+			auctionHouses = {
+				["*"] = {},
+			},
+			personal = {},
+		},
+		vendorFlip = {
+			cod = {},
+			inventory = {},
+			profit = 0,
+		},
 		vendorList = {},
 	},
 }
 
-local playerName, playerRealm, playerFullName
+local playerFaction = UnitFactionGroup("player")
+local oppositeFaction = playerFaction == "Alliance" and "Horde" or "Alliance"
+local playerName, playerSecondName, playerFullName
 
 local function InitializeBroker()
 	addon.brokerObject = LibDataBroker:NewDataObject("YAAHA", {
@@ -162,10 +196,11 @@ function addon:OnInitialize()
 	self.db = LibStub("AceDB-3.0"):New("YAAHADB", defaults, true)
 	self:GetModule("Storage"):RestoreAuctionData()
 
-	-- Store one canonical identity. IsAlt handles Blizzard results which omit the realm.
-	local _, _, fullName = self:GetPlayerIdentity()
-	if fullName then
-		self.db.global.alts[fullName] = true
+	-- YAAHA's identity key follows the form Blizzard uses in links and messages:
+	-- name-realm on existing clients and firstName-surname on Forever.
+	local characterKey = self:GetCharacterKey()
+	if characterKey then
+		self.db.global.alts[characterKey] = true
 	end
 
 	local options = self:GetOptions()
@@ -182,7 +217,6 @@ end
 function addon:OpenConfig()
 	AceConfigDialog:Open("YAAHA")
 end
-
 
 function addon:GetFirstMarketValue(data)
 	if not data then
@@ -202,15 +236,55 @@ function addon:GetItemID(link)
 	return itemID and tonumber(itemID)
 end
 
+function addon:GetCharacterKey()
+	local _, _, fullName = self:GetPlayerIdentity()
+	return fullName
+end
+
+function addon:GetAuctionHouseTypeForScope(scope)
+	if self.UsesSharedAuctionHouse then
+		return "Shared"
+	elseif scope == "realm" then
+		return "Neutral"
+	elseif scope == "factionrealm" then
+		return playerFaction
+	elseif scope == "opposite" then
+		return oppositeFaction
+	end
+end
+
+function addon:GetRealmSales(auctionHouseType)
+	if self.UsesSharedAuctionHouse then
+		auctionHouseType = "Shared"
+	elseif auctionHouseType ~= "Alliance" and auctionHouseType ~= "Horde"
+		and auctionHouseType ~= "Neutral" then
+		auctionHouseType = playerFaction
+	end
+	return self.db.realm.sales.auctionHouses[auctionHouseType], auctionHouseType
+end
+
+function addon:NormalizeCharacterName(name, secondName)
+	if not name or name == "" then
+		return
+	end
+	if self.IsForever then
+		local fullName = secondName and secondName ~= ""
+			and NameUtil.GetFullNameWithoutRealm(name, secondName) or name
+		---@diagnostic disable-next-line: wrong-flavor-api
+		return C_NameUtil.ReplaceSurnameSeparatorWithLinkSeparator(fullName)
+	end
+	return secondName and secondName ~= "" and name .. "-" .. secondName or name
+end
+
 function addon:GetPlayerIdentity()
 	if not playerFullName then
-		playerName, playerRealm = UnitFullName("player")
-		playerRealm = playerRealm or GetNormalizedRealmName()
-		if playerName and playerRealm and playerRealm ~= "" then
-			playerFullName = playerName .. "-" .. playerRealm
+		playerName, playerSecondName = UnitFullName("player")
+		if not self.IsForever then
+			playerSecondName = playerSecondName or GetNormalizedRealmName()
 		end
+		playerFullName = self:NormalizeCharacterName(playerName, playerSecondName)
 	end
-	return playerName, playerRealm, playerFullName
+	return playerName, playerSecondName, playerFullName
 end
 
 function addon:IsDealProfitable(cost, value)
@@ -222,7 +296,8 @@ end
 
 function addon:IsPlayerAuction(owner, ownerFullName)
 	local name, _, fullName = self:GetPlayerIdentity()
-	return owner == name or owner == fullName or ownerFullName == fullName
+	local normalizedOwner = self:NormalizeCharacterName(ownerFullName or owner)
+	return normalizedOwner == fullName or not self.IsForever and owner == name
 		or self:IsAlt(owner, ownerFullName)
 end
 
@@ -235,23 +310,30 @@ function addon:IsAuctionActionError(errorType)
 		or errorType == LE_GAME_ERR_NOT_ENOUGH_MONEY
 end
 
--- Blizzard may report auction, mail, and trade characters as either name or
--- name-realm. YAAHA stores only full names, but accepts either form when
--- recognizing an account character whose realm suffix was omitted.
+-- Existing clients can omit the realm for same-realm characters, so their short
+-- names remain a necessary fallback. Forever first names are not unique; accept
+-- only its complete, link-form firstName-surname identity.
 function addon:IsAlt(name, fullName)
 	local alts = self.db.global.alts
-	if fullName and alts[fullName] or name and alts[name] then
+	local normalizedFullName = self:NormalizeCharacterName(fullName)
+	local normalizedName = self:NormalizeCharacterName(name)
+	if normalizedFullName and alts[normalizedFullName]
+		or normalizedName and alts[normalizedName] then
 		return true
 	end
+	if self.IsForever then
+		return false
+	end
 
-	local shortName = name and name:match("^([^-]+)")
-		or fullName and fullName:match("^([^-]+)")
+	local reportedName = normalizedName or normalizedFullName
+	local shortName = reportedName and reportedName:match("^([^-]+)")
 	if not shortName then
 		return false
 	end
 
 	for altFullName, isAlt in pairs(alts) do
-		if isAlt and altFullName:match("^([^-]+)-") == shortName then
+		local altName = altFullName:match("^([^-]+)")
+		if isAlt and altName == shortName then
 			return true
 		end
 	end

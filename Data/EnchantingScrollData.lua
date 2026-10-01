@@ -1,12 +1,14 @@
+-- Maps equipment-enchant spell IDs to auctionable scrolls and compatible vellums.
+
 local LibStub = LibStub
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
-local module = addon:NewModule("EnchantingData")
+local module = addon:NewModule("EnchantingScrollData")
 
 local ARMOR = 4
 local WEAPON = 2
 
--- Each entry is {finished scroll itemID, target item class, required item level}.
+-- [enchantSpellID] = {scrollItemID, targetItemClass, requiredItemLevel}
 -- Wrath's vellum restrictions are cumulative: a higher tier can also hold every
 -- enchant accepted by the lower tiers.
 local enchants = {

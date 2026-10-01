@@ -1,3 +1,5 @@
+-- Defines material conversions used when comparing alternate per-unit acquisition costs.
+
 local LibStub = LibStub
 local WOW_PROJECT_BURNING_CRUSADE_CLASSIC = WOW_PROJECT_BURNING_CRUSADE_CLASSIC
 local WOW_PROJECT_ID = WOW_PROJECT_ID

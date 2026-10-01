@@ -1,3 +1,5 @@
+-- Scans Classic auction listings and sends complete snapshots for market-data processing.
+
 local C_AuctionHouse = C_AuctionHouse
 local CanSendAuctionQuery = CanSendAuctionQuery
 local ceil = math.ceil
@@ -19,7 +21,7 @@ local UnitGUID = UnitGUID
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("Scanner", "AceEvent-3.0")
 local auctionHouseUI = addon:GetModule("AuctionHouseUI")
-local dataProcessing = addon:GetModule("DataProcessing")
+local dataProcessing
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
 -- UnitFactionGroup() is unreliable for some NPCs, particularly goblins. Explicit
@@ -400,6 +402,10 @@ local function CreateScanButton()
 	scanButton:SetParent(parent)
 	scanButton:Show()
 	UpdateScanButton()
+end
+
+function module:OnInitialize()
+	dataProcessing = addon:GetModule("DataProcessing")
 end
 
 function module:OnEnable()

@@ -1,3 +1,5 @@
+-- Tracks the player's outstanding vendor-flip inventory and realized profit.
+
 local AceConfigRegistry
 local C_Item = C_Item
 local C_Timer = C_Timer
@@ -39,7 +41,7 @@ local profitText
 local tradeSnapshot
 
 local function GetInventory()
-	return addon.db.realm.vendorFlipInventory
+	return addon.db.realm.vendorFlip.inventory
 end
 
 local function CharacterName(name)
@@ -93,7 +95,7 @@ local function SnapshotTrackedItems()
 end
 
 function module:GetFormattedProfit()
-	local profit = addon.db.realm.vendorFlipProfit
+	local profit = addon.db.realm.vendorFlip.profit
 	local numberColor = profit > 0 and GREEN_NUMBER or profit < 0 and RED_NUMBER or nil
 	return addon:FormatMoney(profit, true, numberColor)
 end
@@ -114,7 +116,7 @@ function module:RecordPurchase(itemID, quantity, purchaseValue)
 	local inventory = GetInventory()
 	inventory[itemID] = (inventory[itemID] or 0) + quantity
 	itemCounts[itemID] = GetTrackedCount(itemID)
-	addon.db.realm.vendorFlipProfit = addon.db.realm.vendorFlipProfit - purchaseValue
+	addon.db.realm.vendorFlip.profit = addon.db.realm.vendorFlip.profit - purchaseValue
 	self:RefreshDisplay()
 end
 
@@ -130,7 +132,7 @@ function module:RecordSale(itemID, quantity, proceeds)
 	-- Identical units in a stack share one per-unit sale price. If only part of the
 	-- stack was bought as a vendor flip, credit the same fraction of actual proceeds.
 	local attributedProceeds = floor(proceeds * attributedQuantity / quantity + 0.5)
-	addon.db.realm.vendorFlipProfit = addon.db.realm.vendorFlipProfit + attributedProceeds
+	addon.db.realm.vendorFlip.profit = addon.db.realm.vendorFlip.profit + attributedProceeds
 	inventory[itemID] = outstanding > attributedQuantity and outstanding - attributedQuantity or nil
 	self:RefreshDisplay()
 end
@@ -165,9 +167,9 @@ function module:PreserveQuantity(itemID, quantity)
 end
 
 function module:Reset()
-	addon.db.realm.vendorFlipCOD = {}
-	addon.db.realm.vendorFlipInventory = {}
-	addon.db.realm.vendorFlipProfit = 0
+	addon.db.realm.vendorFlip.cod = {}
+	addon.db.realm.vendorFlip.inventory = {}
+	addon.db.realm.vendorFlip.profit = 0
 	itemCounts = {}
 	pendingLosses = {}
 	preservedQuantities = {}
@@ -299,7 +301,8 @@ function module:MAIL_SEND_SUCCESS()
 		-- deliberately ignored because no truthful per-item allocation is possible.
 		if kindCount == 1 and GetInventory()[itemID] and GetInventory()[itemID] >= quantity then
 			self:PreserveQuantity(itemID, quantity)
-			addon.db.realm.vendorFlipCOD[#addon.db.realm.vendorFlipCOD + 1] = {
+			local cod = addon.db.realm.vendorFlip.cod
+			cod[#cod + 1] = {
 				itemID = itemID,
 				quantity = quantity,
 				proceeds = outgoingMail.cod,
@@ -319,7 +322,7 @@ function module:RecordMailProceeds(sender, subject, proceeds)
 	if not sender or not subject or not proceeds or proceeds < 1 then
 		return
 	end
-	local cod = addon.db.realm.vendorFlipCOD
+	local cod = addon.db.realm.vendorFlip.cod
 	for index = #cod, 1, -1 do
 		local pending = cod[index]
 		if pending.recipient == CharacterName(sender) and pending.subject == subject

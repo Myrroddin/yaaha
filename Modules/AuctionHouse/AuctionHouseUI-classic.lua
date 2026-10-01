@@ -1,3 +1,5 @@
+-- Builds YAAHA's workspace and navigation inside the Classic auction-house frame.
+
 local _G = _G
 local AUCTION_HOUSE_FRAME_TITLE_SELL = AUCTION_HOUSE_FRAME_TITLE_SELL
 local CreateFrame = CreateFrame
