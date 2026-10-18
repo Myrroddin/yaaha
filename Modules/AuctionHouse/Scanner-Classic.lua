@@ -20,6 +20,7 @@ local UnitGUID = UnitGUID
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("Scanner", "AceEvent-3.0")
+local isWrath = addon.IsWrath
 local auctionHouseUI = addon:GetModule("AuctionHouseUI")
 local dataProcessing
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
@@ -71,7 +72,6 @@ local auctioneerFactions = {
 
 local scanButton, auctionScope, scanScope, scanning, lastFullScan
 local UpdateScanButton
-local isWrath = WOW_PROJECT_ID == WOW_PROJECT_WRATH_CLASSIC
 local playerFaction = UnitFactionGroup("player")
 local FULL_SCAN_COOLDOWN = 15 * 60
 
@@ -351,10 +351,11 @@ UpdateScanButton = function()
 	end
 	if not auctionScope then
 		auctionScope = GetAuctionScope()
-		if auctionScope then
-			auctionHouseUI:SetAuctionScope(auctionScope)
-		end
 	end
+	-- AuctionHouseUI and Scanner both receive AUCTION_HOUSE_SHOW, but AceEvent
+	-- does not guarantee their callback order. Reapply the scope after the UI
+	-- exists, and keep retrying while Blizzard's npc unit is not yet available.
+	auctionHouseUI:SetAuctionScope(auctionScope)
 
 	if dataProcessing:IsProcessing() then
 		scanButton:Disable()

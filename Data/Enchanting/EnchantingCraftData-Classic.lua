@@ -1,21 +1,12 @@
--- Maps enchanting recipe spell IDs to the tangible items those recipes create.
+-- Maps Classic Era, Forever, TBC, and Wrath enchanting spells to tangible crafted items.
 
 local LibStub = LibStub
-local WOW_PROJECT_BURNING_CRUSADE_CLASSIC = WOW_PROJECT_BURNING_CRUSADE_CLASSIC
-local WOW_PROJECT_ID = WOW_PROJECT_ID
-local WOW_PROJECT_MISTS_CLASSIC = WOW_PROJECT_MISTS_CLASSIC
-local WOW_PROJECT_WRATH_CLASSIC = WOW_PROJECT_WRATH_CLASSIC
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("EnchantingCraftData")
 
-local isTBC = WOW_PROJECT_ID == WOW_PROJECT_BURNING_CRUSADE_CLASSIC
-local isMists = WOW_PROJECT_ID == WOW_PROJECT_MISTS_CLASSIC
-local isWrath = WOW_PROJECT_ID == WOW_PROJECT_WRATH_CLASSIC
-
--- Enchanting APIs identify both equipment enchants and recipes which create
--- tangible items by spell. These stable spell-to-item mappings distinguish the
--- latter without depending on the client's transient item cache.
+-- Vanilla is the Classic-family baseline. Forever may amend it later without
+-- changing the baseline used by Classic Era, TBC, or Wrath.
 -- [recipeSpellID] = craftedItemID
 local craftedItems = {
 	[7421] = 6218, -- Runed Copper Rod
@@ -39,7 +30,6 @@ local craftedItems = {
 	[25130] = 20748, -- Brilliant Mana Oil
 }
 
--- Forever replaces one Classic recipe and adds tangible enchanting products.
 if addon.IsForever then
 	craftedItems[14810] = nil -- Greater Mystic Wand (item 11290)
 
@@ -85,10 +75,7 @@ if addon.IsForever then
 	craftedItems[1306523] = 279249 -- Totem of Urgency
 	craftedItems[1306524] = 279250 -- Idol of Swiftness
 	craftedItems[1306525] = 279251 -- Idol of the Ursine Twins
-end
-
--- Add tangible items introduced in The Burning Crusade.
-if isTBC or isWrath or isMists then
+elseif addon.IsTBC or addon.IsWrath then
 	craftedItems[28016] = 22521 -- Superior Mana Oil
 	craftedItems[28019] = 22522 -- Superior Wizard Oil
 	craftedItems[28021] = 22445 -- Arcane Dust
@@ -101,41 +88,9 @@ if isTBC or isWrath or isMists then
 	craftedItems[42613] = 22448 -- Nexus Transformation
 	craftedItems[42615] = 22448 -- Small Prismatic Shard
 	craftedItems[45765] = 22449 -- Void Shatter
-end
-
--- Wrath equipment-enchant scrolls remain in the separate Wrath-only
--- EnchantingScrollData module because they additionally require vellums.
-if isWrath or isMists then
-	craftedItems[60619] = 44452 -- Runed Titanium Rod
-end
-
--- Mists Classic incorporates both Cataclysm and Mists changes. Equipment
--- enchant scrolls are not direct recipe products and remain outside this map.
-if isMists then
-	-- Recipes removed before Mists Classic.
-	craftedItems[7795] = nil -- Runed Silver Rod (item 6339)
-	craftedItems[13628] = nil -- Runed Golden Rod (item 11130)
-	craftedItems[13702] = nil -- Runed Truesilver Rod (item 11145)
-	craftedItems[17180] = nil -- Enchanted Thorium Bar (item 12655)
-	craftedItems[20051] = nil -- Runed Arcanite Rod (item 16207)
-	craftedItems[28021] = nil -- Arcane Dust (item 22445)
-	craftedItems[28022] = nil -- Large Prismatic Shard (item 22449)
-	craftedItems[32664] = nil -- Runed Fel Iron Rod (item 22461)
-	craftedItems[32665] = nil -- Runed Adamantite Rod (item 22462)
-	craftedItems[32667] = nil -- Runed Eternium Rod (item 22463)
-	craftedItems[42613] = nil -- Nexus Transformation (item 22448)
-	craftedItems[42615] = nil -- Small Prismatic Shard (item 22448)
-	craftedItems[45765] = nil -- Void Shatter (item 22449)
-	craftedItems[60619] = nil -- Runed Titanium Rod (item 44452)
-
-	-- Tangible products introduced in Cataclysm.
-	craftedItems[93841] = 67274 -- Enchanted Lantern
-	craftedItems[93843] = 67275 -- Magic Lamp
-	craftedItems[104698] = 52721 -- Heavenly Shard (Maelstrom Shatter)
-
-	-- Tangible products introduced in Mists of Pandaria.
-	craftedItems[116499] = 74248 -- Sha Crystal
-	craftedItems[118237] = 74249 -- Spirit Dust (Mysterious Diffusion)
+	if addon.IsWrath then
+		craftedItems[60619] = 44452 -- Runed Titanium Rod
+	end
 end
 
 function module:GetCraftedItem(spellID)

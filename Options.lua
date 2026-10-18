@@ -5,9 +5,6 @@ local AUCTIONS = AUCTIONS
 local BIDS = BIDS
 local BROWSE = BROWSE
 local CTRL_KEY = CTRL_KEY
-local FACTION_ALLIANCE = FACTION_ALLIANCE
-local FACTION_HORDE = FACTION_HORDE
-local FACTION_NEUTRAL = FACTION_NEUTRAL
 local floor = math.floor
 local format = string.format
 local GENERAL_LABEL = GENERAL_LABEL
@@ -17,14 +14,10 @@ local LOCK = LOCK
 local MINIMAP_LABEL = MINIMAP_LABEL
 local SELL_PRICE = SELL_PRICE
 local SHIFT_KEY = SHIFT_KEY
-local UnitFactionGroup = UnitFactionGroup
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 local LibDBIcon = LibStub("LibDBIcon-1.0")
-local playerFaction = UnitFactionGroup("player")
-local currentFactionLabel = playerFaction == "Alliance" and FACTION_ALLIANCE or FACTION_HORDE
-local oppositeFactionLabel = playerFaction == "Alliance" and FACTION_HORDE or FACTION_ALLIANCE
 
 local function GetRoundedMinimapPosition(value)
 	if addon.db.global.minimap.lockOnDegree then
@@ -35,6 +28,16 @@ end
 
 local function RefreshMinimapButton()
 	LibDBIcon:Refresh("YAAHA", addon.db.global.minimap)
+end
+
+local function CreateTooltipToggle(order, name)
+	return {
+		order = order,
+		type = "toggle",
+		width = "relative",
+		relWidth = 1 / 3,
+		name = name,
+	}
 end
 
 local options
@@ -59,7 +62,7 @@ function addon:GetOptions()
 						order = 10,
 						type = "select",
 						width = "relative",
-						relWidth = 0.5,
+						relWidth = 0.33,
 						name = L["Open auction house to"],
 						desc = L["Choose the page shown whenever the auction house is opened."],
 						values = {
@@ -82,7 +85,7 @@ function addon:GetOptions()
 						order = 20,
 						type = "select",
 						width = "relative",
-						relWidth = 0.5,
+						relWidth = 0.33,
 						name = L["Coin display"],
 						desc = L["Choose between Blizzard's coin textures and localized denomination letters."],
 						values = {
@@ -97,59 +100,39 @@ function addon:GetOptions()
 							addon:GetModule("VendorFlipTracking"):RefreshDisplay()
 						end
 					},
-					synchronization = {
+					numDecimals = {
 						order = 30,
-						type = "group",
-						inline = true,
-						width = "full",
-						name = L["Auction data synchronization"],
-						get = function(info)
-							return addon.db.profile.synchronization[info[#info]]
+						type = "range",
+						width = "relative",
+						relWidth = 0.33,
+						name = L["Decimal places"],
+						desc = L["Choose how many decimal places YAAHA displays."],
+						get = function()
+							return addon.db.profile.numDecimals
 						end,
-						set = function(info, value)
-							addon.db.profile.synchronization[info[#info]] = value
+						set = function(_, value)
+							addon.db.profile.numDecimals = floor(value + 0.5)
 						end,
-						args = {
-							shared = {
-								order = 10,
-								type = "toggle",
-								width = "relative",
-								relWidth = 0.3,
-								name = L["Shared auction house"],
-								desc = L["Send and receive shared auction-house data with guild members on the same or a connected realm."],
-								hidden = not addon.UsesSharedAuctionHouse
-							},
-							currentFaction = {
-								order = 20,
-								type = "toggle",
-								width = "relative",
-								relWidth = 0.3,
-								name = currentFactionLabel,
-								desc = L["Send and receive current-faction auction data with guild members on the same or a connected realm."],
-								hidden = addon.UsesSharedAuctionHouse
-							},
-							oppositeFaction = {
-								order = 30,
-								type = "toggle",
-								width = "relative",
-								relWidth = 0.3,
-								name = oppositeFactionLabel,
-								desc = L["Send and receive opposite-faction auction data with guild members on the same or a connected realm."],
-								hidden = addon.UsesSharedAuctionHouse
-							},
-							neutral = {
-								order = 40,
-								type = "toggle",
-								width = "relative",
-								relWidth = 0.3,
-								name = FACTION_NEUTRAL,
-								desc = L["Send and receive neutral auction-house data with guild members on the same or a connected realm."],
-								hidden = addon.UsesSharedAuctionHouse
-							}
-						}
+						min = 1,
+						max = 3,
+						step = 1,
+					},
+					syncData = {
+						order = 40,
+						type = "toggle",
+						width = "relative",
+						relWidth = 0.5,
+						name = L["Sync Data"],
+						desc = L["Send and receive all supported auction, realm-sale, and learned material-breakdown data with guild members on the same or a connected realm."],
+						get = function()
+							return addon.db.profile.syncData
+						end,
+						set = function(_, value)
+							addon.db.profile.syncData = value
+						end
 					},
 					formatLargeNumbers = {
-						order = 60,
+						order = 50,
 						type = "toggle",
 						width = "relative",
 						relWidth = 0.5,
@@ -163,22 +146,22 @@ function addon:GetOptions()
 							addon:GetModule("VendorFlipTracking"):RefreshDisplay()
 						end
 					},
-					includeBreakEvenDeals = {
-						order = 70,
+					includeBreakEvenVendorDeals = {
+						order = 60,
 						type = "toggle",
 						width = "relative",
 						relWidth = 0.5,
-						name = L["Include break-even deals"],
-						desc = L["Include vendor, disenchanting, prospecting, and milling deals whose purchase price equals their expected return."],
+						name = L["Include break-even vendor flips"],
+						desc = L["Include vendor-flip deals whose purchase price equals their guaranteed vendor return."],
 						get = function()
-							return self.db.profile.includeBreakEvenDeals
+							return self.db.profile.includeBreakEvenVendorDeals
 						end,
 						set = function(_, value)
-							self.db.profile.includeBreakEvenDeals = value
+							self.db.profile.includeBreakEvenVendorDeals = value
 						end
 					},
 					total = {
-						order = 80,
+						order = 70,
 						type = "description",
 						width = "relative",
 						relWidth = 0.5,
@@ -188,7 +171,7 @@ function addon:GetOptions()
 						end
 					},
 					reset = {
-						order = 90,
+						order = 80,
 						type = "execute",
 						width = "relative",
 						relWidth = 0.5,
@@ -197,6 +180,65 @@ function addon:GetOptions()
 						func = function()
 							addon:GetModule("VendorFlipTracking"):Reset()
 						end
+					},
+					disenchantingDealThreshold = {
+						order = 90,
+						type = "range",
+						width = "relative",
+						relWidth = 0.5,
+						name = L["Disenchanting deal threshold"],
+						desc = L["Only return disenchanting deals whose purchase price is no more than this percentage of their expected disenchanting value."],
+						min = 0.01,
+						max = 1,
+						step = 0.01,
+						bigStep = 0.05,
+						isPercent = true,
+						get = function()
+							return addon.db.profile.disenchantingDealThreshold
+						end,
+						set = function(_, value)
+							addon.db.profile.disenchantingDealThreshold = value
+						end,
+					},
+					prospectingDealThreshold = {
+						order = 100,
+						type = "range",
+						width = "relative",
+						relWidth = 0.5,
+						name = L["Prospecting deal threshold"],
+						desc = L["Only return prospecting deals whose purchase price is no more than this percentage of their expected prospecting value."],
+						min = 0.01,
+						max = 1,
+						step = 0.01,
+						bigStep = 0.05,
+						isPercent = true,
+						get = function()
+							return addon.db.profile.prospectingDealThreshold
+						end,
+						set = function(_, value)
+							addon.db.profile.prospectingDealThreshold = value
+						end,
+						hidden = addon.IsClassicEra or addon.IsForever,
+					},
+					millingDealThreshold = {
+						order = 110,
+						type = "range",
+						width = "relative",
+						relWidth = 0.5,
+						name = L["Milling deal threshold"],
+						desc = L["Only return milling deals whose purchase price is no more than this percentage of their expected milling value."],
+						min = 0.01,
+						max = 1,
+						step = 0.01,
+						bigStep = 0.05,
+						isPercent = true,
+						get = function()
+							return addon.db.profile.millingDealThreshold
+						end,
+						set = function(_, value)
+							addon.db.profile.millingDealThreshold = value
+						end,
+						hidden = addon.IsClassicEra or addon.IsForever or addon.IsTBC,
 					}
 				}
 			},
@@ -251,37 +293,40 @@ function addon:GetOptions()
 					},
 					values = {
 						order = 60,
-						type = "multiselect",
-						width = 1.1,
+						type = "group",
+						inline = true,
+						width = "full",
 						name = L["Tooltip values"],
-						values = {
-							["01-minBid"] = L["Minimum bid"],
-							["02-minBuyout"] = L["Minimum buyout"],
-							["03-currentMarketValue"] = L["Current market value"],
-							["04-midweekMarketValue"] = L["3-day market value"],
-							["05-weeklyMarketValue"] = L["7-day market value"],
-							["06-biweeklyMarketValue"] = L["14-day market value"],
-							["07-monthlyMarketValue"] = L["30-day market value"],
-							["08-bimonthlyMarketValue"] = L["60-day market value"],
-							["09-auctionQuantity"] = AUCTION_HOUSE_BROWSE_HEADER_QUANTITY,
-							["10-breakdownValue"] = L["Expected breakdown value"],
-							["11-breakdownResults"] = L["Breakdown results"],
-							["12-vendorSell"] = SELL_PRICE,
-							["13-vendorBuy"] = L["Buy from vendor"],
-							["14-inventoryAverageBuy"] = L["Inventory average buy"],
-							["15-personalSaleRate"] = L["Personal sale rate"],
-							["16-realmSaleRate"] = L["Realm sale rate"],
-							["17-realmSoldPerDay"] = L["Realm sold per day"],
-							["18-realmAverageSaleValue"] = L["Realm average sale value"],
-							["19-craftingValue"] = L["Crafting cost"],
-							["20-craftingResults"] = L["Crafting breakdown"],
-						},
-						get = function(_, key)
-							return addon.db.profile.tooltip[key]
+						get = function(info)
+							return addon.db.profile.tooltip[info[#info]]
 						end,
-						set = function(_, key, value)
-							addon.db.profile.tooltip[key] = value
-						end
+						set = function(info, value)
+							addon.db.profile.tooltip[info[#info]] = value
+						end,
+						args = {
+							["01-minBid"] = CreateTooltipToggle(10, L["Minimum bid"]),
+							["02-minBuyout"] = CreateTooltipToggle(20, L["Minimum buyout"]),
+							["03-currentMarketValue"] = CreateTooltipToggle(30, L["Current market value"]),
+							["04-midweekMarketValue"] = CreateTooltipToggle(40, L["3-day market value"]),
+							["05-weeklyMarketValue"] = CreateTooltipToggle(50, L["7-day market value"]),
+							["06-biweeklyMarketValue"] = CreateTooltipToggle(60, L["14-day market value"]),
+							["07-monthlyMarketValue"] = CreateTooltipToggle(70, L["30-day market value"]),
+							["08-bimonthlyMarketValue"] = CreateTooltipToggle(80, L["60-day market value"]),
+							["09-auctionQuantity"] = CreateTooltipToggle(90, AUCTION_HOUSE_BROWSE_HEADER_QUANTITY),
+							["10-breakdownValue"] = CreateTooltipToggle(100, L["Expected breakdown value"]),
+							["11-breakdownResults"] = CreateTooltipToggle(110, L["Breakdown results"]),
+							["12-vendorSell"] = CreateTooltipToggle(120, SELL_PRICE),
+							["13-vendorBuy"] = CreateTooltipToggle(130, L["Buy from vendor"]),
+							["14-inventoryAverageBuy"] = CreateTooltipToggle(140, L["Inventory average buy"]),
+							["15-personalSaleRate"] = CreateTooltipToggle(150, L["Personal sale rate"]),
+							["16-realmSaleRate"] = CreateTooltipToggle(160, L["Realm sale rate"]),
+							["17-realmSoldPerDay"] = CreateTooltipToggle(170, L["Realm sold per day"]),
+							["18-realmAverageSaleValue"] = CreateTooltipToggle(180, L["Realm average sale value"]),
+							["19-craftingValue"] = CreateTooltipToggle(190, L["Crafting cost"]),
+							["20-craftingResults"] = CreateTooltipToggle(200, L["Crafting breakdown"]),
+							["21-conversionValue"] = CreateTooltipToggle(210, L["Conversion cost"]),
+							["22-conversionResults"] = CreateTooltipToggle(220, L["Full conversion breakdown"]),
+						}
 					}
 				}
 			},

@@ -1,4 +1,3 @@
-local ceil = math.ceil
 local floor = math.floor
 local LibStub = LibStub
 local next = next
@@ -7,6 +6,7 @@ local UnitFactionGroup = UnitFactionGroup
 
 local playerFaction = UnitFactionGroup("player")
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
+local usesSharedAuctionHouse = addon.UsesSharedAuctionHouse
 local saleCollector = addon:GetModule("SaleCollector")
 local disenchantingData = addon:GetModule("DisenchantingData")
 local professionScanner = addon:GetModule("ProfessionScanner")
@@ -50,7 +50,7 @@ local API_VERSION = 1
 
 ---@class YAAHA_API.DisenchantResults
 ---@field requiredSkill integer Required Enchanting skill.
----@field sampleCount integer Number of player-observed disenchantments contributing to this result range.
+---@field sampleCount integer Number of learned local and synchronized disenchantments contributing to this result range.
 ---@field results YAAHA_API.DisenchantMaterial[] Possible material results.
 
 ---@class YAAHA_API.PricedDisenchantMaterial: YAAHA_API.DisenchantMaterial
@@ -62,10 +62,10 @@ local API_VERSION = 1
 ---@class YAAHA_API.PricedDisenchantResults
 ---@field expectedValue? integer Complete expected disenchant value in copper.
 ---@field requiredSkill integer Required Enchanting skill.
----@field sampleCount integer Number of player-observed disenchantments contributing to this result range.
+---@field sampleCount integer Number of learned local and synchronized disenchantments contributing to this result range.
 ---@field results YAAHA_API.PricedDisenchantMaterial[] Priced material results.
 
----@alias YAAHA_API.MaterialValueSource "market"|"vendor"|"convert"|"crafting"
+---@alias YAAHA_API.MaterialValueSource "market"|"vendor"|"convert"|"crafting"|"soulboundFallback"
 
 ---@class YAAHA_API.CraftingConversion
 ---@field itemID integer Converted source-material item ID.
@@ -85,7 +85,7 @@ local API_VERSION = 1
 ---@field value integer Per-unit crafting value in copper.
 ---@field totalReagentValue integer Reagent value for one recipe cast in copper.
 ---@field outputQuantity number Average number of items produced per cast.
----@field masteryYield number Expected finished-item auction-return multiplier from a matching Alchemy mastery; otherwise `1`. This does not reduce crafting or material costs.
+---@field expectedOutputMultiplier number Expected finished-item auction-return multiplier from an applicable Alchemy specialization; `1`, `1.2`, or `1.4`. This does not reduce crafting or material costs.
 ---@field character string Canonical character identity whose known recipe was used (`name-realm` or Forever's `firstName-surname`).
 ---@field profession string Localized profession name.
 ---@field stale boolean Whether the character's profession snapshot predates the current game-client build.
@@ -117,7 +117,7 @@ local API_VERSION = 1
 ---@field GetLastScanTime fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
 ---@field GetAuctionHouseStats fun(auctionHouseType?: YAAHA_API.AuctionHouseType): YAAHA_API.AuctionHouseStats?
 ---@field GetRealmSaleRate fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): number?
----@field GetRealmSoldPerDay fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
+---@field GetRealmSoldPerDay fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): number?
 ---@field GetRealmAverageSaleValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
 ---@field IsDisenchantable fun(itemID: integer): boolean
 ---@field GetDisenchantResults fun(itemID: integer): YAAHA_API.DisenchantResults?
@@ -159,7 +159,7 @@ local copperFields = {
 }
 
 local function ResolveAuctionHouseType(auctionHouseType)
-	if addon.UsesSharedAuctionHouse then
+	if usesSharedAuctionHouse then
 		if auctionHouseType == nil or auctionHouseType == "Alliance"
 			or auctionHouseType == "Horde" or auctionHouseType == "Neutral"
 			or auctionHouseType == "Shared" then
@@ -401,10 +401,10 @@ end
 
 ---@param itemID integer
 ---@param auctionHouseType? YAAHA_API.AuctionHouseType
----@return integer? realmSoldPerDay
+---@return number? realmSoldPerDay
 function API.GetRealmSoldPerDay(itemID, auctionHouseType)
 	local _, sold = GetRealmSaleData(itemID, auctionHouseType)
-	return NormalizeQuantity(sold)
+	return type(sold) == "number" and sold >= 0 and sold or nil
 end
 
 ---@param itemID integer
@@ -505,7 +505,7 @@ end
 ---@param value number
 ---@return integer copper
 local function NormalizeRequiredCopper(value)
-	return ceil(value)
+	return addon:RoundMoney(value) or 0
 end
 
 local CopyCraftingResult
@@ -519,7 +519,7 @@ function CopyCraftingResult(source)
 		value = NormalizeRequiredCopper(source.value),
 		totalReagentValue = NormalizeRequiredCopper(source.totalReagentValue),
 		outputQuantity = source.outputQuantity,
-		masteryYield = source.masteryYield,
+		expectedOutputMultiplier = source.expectedOutputMultiplier,
 		character = source.character,
 		profession = source.profession,
 		stale = source.stale,
@@ -569,10 +569,10 @@ function API.GetCraftingValue(itemID, auctionHouseType, fullResults, currentChar
 		return
 	end
 	local auctionDB = GetAuctionDB(auctionHouseType)
-	local allowMastery = addon.UsesSharedAuctionHouse
+	local allowAlchemySpecialization = usesSharedAuctionHouse
 		or GetAuctionScope(auctionHouseType) == "factionrealm"
 	local result = auctionDB and professionScanner:GetItemCrafting(
-		itemID, auctionDB, currentCharacterOnly, allowMastery)
+		itemID, auctionDB, currentCharacterOnly, allowAlchemySpecialization)
 	return fullResults and CopyCraftingResult(result) or result and NormalizeRequiredCopper(result.value)
 end
 
@@ -588,9 +588,9 @@ function API.GetRecipeCraftingValue(spellID, auctionHouseType, fullResults, curr
 		return
 	end
 	local auctionDB = GetAuctionDB(auctionHouseType)
-	local allowMastery = addon.UsesSharedAuctionHouse
+	local allowAlchemySpecialization = usesSharedAuctionHouse
 		or GetAuctionScope(auctionHouseType) == "factionrealm"
 	local result = auctionDB and professionScanner:GetRecipeCrafting(
-		spellID, auctionDB, currentCharacterOnly, allowMastery)
+		spellID, auctionDB, currentCharacterOnly, allowAlchemySpecialization)
 	return fullResults and CopyCraftingResult(result) or result and NormalizeRequiredCopper(result.value)
 end

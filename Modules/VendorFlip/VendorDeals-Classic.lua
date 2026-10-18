@@ -74,7 +74,7 @@ local function GetVendorCacheCounts()
 				local vendorReturn = vendorData.vendorSell * auction.count
 				local bid = auction.unitBid and floor(auction.unitBid * auction.count + 0.5)
 				local buyout = auction.unitBuyout and floor(auction.unitBuyout * auction.count + 0.5)
-				if addon:IsDealProfitable(bid, vendorReturn) or addon:IsDealProfitable(buyout, vendorReturn) then
+				if addon:IsVendorDealProfitable(bid, vendorReturn) or addon:IsVendorDealProfitable(buyout, vendorReturn) then
 					itemListings = itemListings + (auction.numAuctions or 1)
 				end
 			end
@@ -275,11 +275,11 @@ local function RevalidateCandidate(candidate, action)
 		-- At the buyout price, PlaceAuctionBid buys the listing instead of placing
 		-- a conventional bid, so that action belongs exclusively to Buyout.
 		if (listing.buyout > 0 and listing.payableBid >= listing.buyout)
-			or not addon:IsDealProfitable(listing.payableBid, vendorReturn) then
+			or not addon:IsVendorDealProfitable(listing.payableBid, vendorReturn) then
 			return
 		end
 		return listing, listing.payableBid
-	elseif listing.buyout > 0 and addon:IsDealProfitable(listing.buyout, vendorReturn) then
+	elseif listing.buyout > 0 and addon:IsVendorDealProfitable(listing.buyout, vendorReturn) then
 		return listing, listing.buyout
 	end
 end
@@ -339,8 +339,8 @@ local function ShowCandidate(listing)
 
 	local vendorReturn = currentRequest.vendorSell * listing.count
 	local canBid = (listing.buyout <= 0 or listing.payableBid < listing.buyout)
-		and addon:IsDealProfitable(listing.payableBid, vendorReturn)
-	local canBuy = listing.buyout > 0 and addon:IsDealProfitable(listing.buyout, vendorReturn)
+		and addon:IsVendorDealProfitable(listing.payableBid, vendorReturn)
+	local canBuy = listing.buyout > 0 and addon:IsVendorDealProfitable(listing.buyout, vendorReturn)
 	if not canBid and not canBuy then
 		return false
 	end
@@ -457,10 +457,10 @@ local function BuildQueue(vendorList, scope)
 			local bid = auction.unitBid and floor(auction.unitBid * auction.count + 0.5) or nil
 			local buyout = auction.unitBuyout and floor(auction.unitBuyout * auction.count + 0.5) or 0
 			local bestProfit
-			if addon:IsDealProfitable(bid, vendorReturn) then
+			if addon:IsVendorDealProfitable(bid, vendorReturn) then
 				bestProfit = vendorReturn - bid
 			end
-			if addon:IsDealProfitable(buyout, vendorReturn)
+			if addon:IsVendorDealProfitable(buyout, vendorReturn)
 				and (not bestProfit or vendorReturn - buyout > bestProfit) then
 				bestProfit = vendorReturn - buyout
 			end

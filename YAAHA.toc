@@ -1,4 +1,4 @@
-## Interface: 120100, 50504, 38002, 20506, 16001, 11509
+## Interface: 120105, 50504, 38002, 20506, 16001, 11509
 ## Title: YAAHA
 ## Notes: Yet Another Auction House Addon
 ## Notes-deDE: @localization(locale="deDE", key="Notes", namespace="ToC")@
@@ -74,27 +74,40 @@ Locales\zhTW.lua
 
 Core.lua
 Options.lua
-Data\ConvertData.lua
-Data\DisenchantingCollector.lua
-Data\DisenchantingData.lua
-Data\EnchantingCraftData.lua
-Data\EnchantingScrollData.lua [AllowLoadGameType wrath]
-Modules\AuctionHouse\AuctionHouseUI-Classic.lua [AllowLoadGameType vanilla, tbc, wrath]
-Modules\AuctionHouse\AuctionHouseUI-Modern.lua [AllowLoadGameType standard, mists, camelot]
+Data\Collectors\DisenchantingCollector.lua
+Data\Collectors\MillingCollector.lua [AllowLoadGameType wrath, mists, standard]
+Data\Collectors\ProspectingCollector.lua [AllowLoadGameType tbc, wrath, mists, standard]
+Data\Convert\CreateConvertDataModule.lua
+Data\Convert\LoadConvertDataModule-Classic.lua [AllowLoadGameType classic, camelot] [ExcludeLoadGameType mists]
+Data\Convert\LoadConvertDataModule-Modern.lua [AllowLoadGameType standard, mists]
+Data\Disenchanting\DisenchantingData.lua
+Data\Enchanting\EnchantingCraftData-Classic.lua [AllowLoadGameType classic, camelot] [ExcludeLoadGameType mists]
+Data\Enchanting\EnchantingCraftData-Modern.lua [AllowLoadGameType standard, mists]
+Data\Enchanting\EnchantingScrollData.lua [AllowLoadGameType wrath, mists]
+Data\MaterialBreakdown\MaterialBreakdownData.lua [AllowLoadGameType tbc, wrath, mists, standard]
+Data\Milling\MillingData-Classic.lua [AllowLoadGameType wrath]
+Data\Milling\MillingData-Modern.lua [AllowLoadGameType standard, mists]
+Data\Prospecting\ProspectingData-Classic.lua [AllowLoadGameType tbc, wrath]
+Data\Prospecting\ProspectingData-Modern.lua [AllowLoadGameType standard, mists]
+Modules\AuctionHouse\AuctionHouseUI-Classic.lua [AllowLoadGameType classic] [ExcludeLoadGameType mists]
+Modules\AuctionHouse\AuctionHouseUI-Modern.lua [AllowLoadGameType mainline, mists]
 Modules\AuctionHouse\SaleCollector.lua
-Modules\AuctionHouse\Scanner-Classic.lua [AllowLoadGameType vanilla, tbc, wrath]
-Modules\AuctionHouse\Scanner-Modern.lua [AllowLoadGameType standard, mists, camelot]
+Modules\AuctionHouse\Scanner-Classic.lua [AllowLoadGameType classic] [ExcludeLoadGameType mists]
+Modules\AuctionHouse\Scanner-Modern.lua [AllowLoadGameType mainline, mists]
 Modules\Data\DataProcessing.lua
 Modules\Data\Storage.lua
 Modules\Data\Sync.lua
-Modules\Disenchanting\DisenchantingDeals-Classic.lua [AllowLoadGameType vanilla, tbc, wrath]
-Modules\Disenchanting\DisenchantingDeals-Modern.lua [AllowLoadGameType standard, mists, camelot]
+Modules\Disenchanting\DisenchantingDeals-Classic.lua [AllowLoadGameType classic] [ExcludeLoadGameType mists]
+Modules\Disenchanting\DisenchantingDeals-Modern.lua [AllowLoadGameType mainline, mists]
 Modules\Inventory\InventoryAverageBuy.lua
-Modules\Professions\ProfessionScanner-Classic.lua [AllowLoadGameType vanilla, tbc, wrath]
-Modules\Professions\ProfessionScanner-Modern.lua [AllowLoadGameType standard, mists, camelot]
+Modules\Professions\ProfessionData.lua
+Modules\Professions\ProfessionScanner-Classic.lua [AllowLoadGameType classic]
+Modules\Professions\ProfessionScanner-Modern.lua [AllowLoadGameType mainline]
 Modules\Tooltip\Tooltip.lua
+Modules\Tooltip\TooltipHooks-Classic.lua [AllowLoadGameType classic] [ExcludeLoadGameType camelot]
+Modules\Tooltip\TooltipHooks-Modern.lua [AllowLoadGameType standard, camelot]
 Modules\Vendor\MerchantData.lua
-Modules\VendorFlip\VendorDeals-Classic.lua [AllowLoadGameType vanilla, tbc, wrath]
-Modules\VendorFlip\VendorDeals-Modern.lua [AllowLoadGameType standard, mists, camelot]
+Modules\VendorFlip\VendorDeals-Classic.lua [AllowLoadGameType classic] [ExcludeLoadGameType mists]
+Modules\VendorFlip\VendorDeals-Modern.lua [AllowLoadGameType mainline, mists]
 Modules\VendorFlip\VendorFlipTracking.lua
 API\API.lua

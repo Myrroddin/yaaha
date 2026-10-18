@@ -1,6 +1,7 @@
--- Scans known Classic profession recipes and calculates material and crafting values.
+-- Collects known recipes from the legacy Craft and TradeSkill profession APIs.
 
 local C_Item = C_Item
+local C_Spell = C_Spell
 local C_Timer = C_Timer
 local CollapseCraftSkillLine = CollapseCraftSkillLine
 local CollapseSkillHeader = CollapseSkillHeader
@@ -8,9 +9,8 @@ local CollapseTradeSkillSubClass = CollapseTradeSkillSubClass
 local ExpandCraftSkillLine = ExpandCraftSkillLine
 local ExpandSkillHeader = ExpandSkillHeader
 local ExpandTradeSkillSubClass = ExpandTradeSkillSubClass
-local GetBuildInfo = GetBuildInfo
-local GetCraftInfo = GetCraftInfo
 local GetCraftDisplaySkillLine = GetCraftDisplaySkillLine
+local GetCraftInfo = GetCraftInfo
 local GetCraftItemLink = GetCraftItemLink
 local GetCraftNumReagents = GetCraftNumReagents
 local GetCraftReagentInfo = GetCraftReagentInfo
@@ -21,8 +21,8 @@ local GetNumSkillLines = GetNumSkillLines
 local GetNumTradeSkills = GetNumTradeSkills
 local GetProfessionInfo = GetProfessionInfo
 local GetProfessions = GetProfessions
-local GetServerTime = GetServerTime
 local GetSkillLineInfo = GetSkillLineInfo
+local GetTime = GetTime
 local GetTradeSkillInfo = GetTradeSkillInfo
 local GetTradeSkillItemLink = GetTradeSkillItemLink
 local GetTradeSkillLine = GetTradeSkillLine
@@ -34,44 +34,35 @@ local GetTradeSkillRecipeLink = GetTradeSkillRecipeLink
 local IsTradeSkillLinked = IsTradeSkillLinked
 local LibStub = LibStub
 local match = string.match
-local MINING = MINING
 local next = next
-local pairs = pairs
 local select = select
-local SMELTING = SMELTING
-local sort = table.sort
-local time = time
 local tonumber = tonumber
-local type = type
 local UNKNOWN = UNKNOWN
-local WOW_PROJECT_ID = WOW_PROJECT_ID
-local WOW_PROJECT_WRATH_CLASSIC = WOW_PROJECT_WRATH_CLASSIC
 
 local ALCHEMY_SKILL_LINE = 171
-local ALCHEMY_MASTERY_BONUS = 1.2
-local CONSUMABLE_CLASS = 0
-local ELIXIR_SUBCLASS = 2
-local ELIXIR_MASTERY = 2
-local FLASK_SUBCLASS = 3
-local POTION_SUBCLASS = 1
-local POTION_MASTERY = 3
-local TRANSMUTATION_MASTERY = 4
+local MINING_SPELL_ID = 2575
+local SMELTING_SPELL_ID = 2656
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
-local module = addon:NewModule("ProfessionScanner", "AceEvent-3.0")
-local convertData = addon:GetModule("ConvertData")
+local module = addon:GetModule("ProfessionScanner")
 local enchantingCraftData = addon:GetModule("EnchantingCraftData")
--- The spell-to-scroll and vellum mapping is loaded only by Wrath-based clients.
+-- Wrath and Mists map direct enchant spells to auctionable scroll items.
 local enchantingScrollData = addon:GetModule("EnchantingScrollData", true)
 
-local currentBuild = select(2, GetBuildInfo())
-local isWrath = WOW_PROJECT_ID == WOW_PROJECT_WRATH_CLASSIC
-local recipeRevision = 0
-local recipeIndexes = {}
+local craftScanPending = false
+local scanningCraft = false
+local scanningTradeSkill = false
+local tradeSkillScanPending = false
+local ignoreCraftUpdatesUntil = 0
+local ignoreTradeSkillUpdatesUntil = 0
 
-local function GetPlayerCharacterKey()
-	return addon:GetCharacterKey()
+local function GetSpellName(spellID)
+	local info = C_Spell.GetSpellInfo(spellID)
+	return info and info.name
 end
+
+local MINING_NAME = GetSpellName(MINING_SPELL_ID)
+local SMELTING_NAME = GetSpellName(SMELTING_SPELL_ID)
 
 local function GetSpellID(link)
 	local spellID = link and (match(link, "enchant:(%d+)") or match(link, "spell:(%d+)"))
@@ -87,16 +78,9 @@ local function GetCraftOutputItemID(name, outputLink, spellID)
 	if itemID then
 		return itemID
 	end
-
-	-- Classic's Enchanting window returns an enchant link for every recipe,
-	-- including oils, wands, and rods which really do create an item. Blizzard's
-	-- item lookup distinguishes those recipes by resolving their localized craft
-	-- name; ordinary equipment enchants have no same-named item and remain nil.
+	-- Classic Enchanting returns enchant links for item-producing oils, wands,
+	-- and rods. A same-named item resolves those while direct enchants remain nil.
 	return C_Item.GetItemInfoInstant(name)
-end
-
-local function GetTimestamp()
-	return GetServerTime and GetServerTime() or time()
 end
 
 local function ReadSkillLines()
@@ -137,59 +121,43 @@ local function ResolveSkillLineName(name, skillLines)
 	if skillLines[name] then
 		return name
 	end
-	-- Blizzard presents Mining's recipe window as Smelting. Using localized
-	-- globals connects the two names without embedding English text.
-	if name == SMELTING and MINING and skillLines[MINING] then
-		return MINING
+	if name == SMELTING_NAME and MINING_NAME and skillLines[MINING_NAME] then
+		return MINING_NAME
 	end
 end
 
 local function GetProfessionIdentity(name)
-	local primary1, primary2, archaeology, fishing, cooking = GetProfessions()
-	local professions = { primary1, primary2, archaeology, fishing, cooking }
-	for _, professionIndex in pairs(professions) do
+	local primary1, primary2 = GetProfessions()
+	local count = select("#", GetProfessions())
+	for slot = 1, count do
+		local professionIndex = select(slot, GetProfessions())
 		if professionIndex then
-			local professionName, _, _, _, _, _, skillLineID, _, specializationIndex =
+			local professionName, _, _, _, _, _, skillLineID =
 				GetProfessionInfo(professionIndex)
-			if professionName == name or name == SMELTING and professionName == MINING then
-				return skillLineID, professionIndex == primary1 or professionIndex == primary2,
-					specializationIndex
+			if professionName == name or name == SMELTING_NAME and professionName == MINING_NAME then
+				return skillLineID, professionIndex == primary1 or professionIndex == primary2
 			end
 		end
 	end
 end
 
 local function ReconcileProfessions()
-	local characterKey = GetPlayerCharacterKey()
-	if not characterKey then
-		return
-	end
 	local skillLines = ReadSkillLines()
 	if not skillLines then
-		-- An empty skill list during login or a UI transition is not proof that the
-		-- character forgot every profession. Preserve data and try again later.
 		return
 	end
-
-	local professions = addon.db.factionrealm.knownProfessions[characterKey]
-	local changed
-	for professionKey, profession in pairs(professions) do
-		-- skillLineName is set only when Blizzard's complete skill list verified the
-		-- profession. Unverifiable Craft-frame categories are retained rather than
-		-- deleted on circumstantial evidence.
-		if profession.skillLineName and not skillLines[profession.skillLineName] then
-			professions[professionKey] = nil
-			changed = true
-		end
-	end
-	if changed then
-		recipeRevision = recipeRevision + 1
-	end
+	module:RemoveProfessions(function(_, profession)
+		return (not profession.collector or profession.collector == "classic")
+			and profession.skillLineName and not skillLines[profession.skillLineName]
+	end)
 end
 
 local function ReadReagents(index, isCraft)
 	local reagents = {}
 	local count = isCraft and GetCraftNumReagents(index) or GetTradeSkillNumReagents(index)
+	if count == nil then
+		return nil, false
+	end
 	for reagentIndex = 1, count do
 		local link = isCraft and GetCraftReagentItemLink(index, reagentIndex)
 			or GetTradeSkillReagentItemLink(index, reagentIndex)
@@ -200,86 +168,57 @@ local function ReadReagents(index, isCraft)
 		else
 			_, _, quantity = GetTradeSkillReagentInfo(index, reagentIndex)
 		end
-		if itemID and quantity and quantity > 0 then
-			reagents[itemID] = (reagents[itemID] or 0) + quantity
+		if not itemID or not quantity or quantity <= 0 then
+			return nil, false
 		end
+		reagents[itemID] = (reagents[itemID] or 0) + quantity
 	end
-	return reagents
+	return reagents, true
 end
 
-local function GetAlchemyMastery(outputItemID, altVerb)
-	-- Alchemy transmutes use an alternate action verb while ordinary recipes use
-	-- Create. Numeric item classes avoid relying on localized Potion/Elixir names;
-	-- Classic's Enum.ItemConsumableSubclass values are known to be unreliable.
-	if altVerb then
-		return "transmutation"
-	end
-	if not outputItemID then
-		return
-	end
-	local _, _, _, _, _, _, _, _, _, _, _, classID, subclassID =
-		C_Item.GetItemInfo(outputItemID)
-	if classID ~= CONSUMABLE_CLASS then
-		return
-	end
-	if subclassID == POTION_SUBCLASS then
-		return "potion"
-	elseif subclassID == ELIXIR_SUBCLASS or subclassID == FLASK_SUBCLASS then
-		return "elixir"
-	end
-end
-
-local function GetMasteryYield(entry, allowMastery)
-	if not allowMastery then
-		return 1
-	end
-	if entry.skillLineID ~= ALCHEMY_SKILL_LINE then
-		return 1
-	end
-	local mastery = entry.recipe.alchemyMastery
-	local specialization = entry.specializationIndex
-	if mastery == "potion" and specialization == POTION_MASTERY
-		or mastery == "elixir" and specialization == ELIXIR_MASTERY
-		or mastery == "transmutation" and specialization == TRANSMUTATION_MASTERY then
-		return ALCHEMY_MASTERY_BONUS
-	end
-	return 1
-end
-
-local function ReadRecipe(index, name, isCraft, altVerb)
+local function ReadRecipe(index, name, isCraft, altVerb, isAlchemy)
 	local recipeLink = isCraft and GetCraftRecipeLink(index) or GetTradeSkillRecipeLink(index)
 	local outputLink = isCraft and GetCraftItemLink(index) or GetTradeSkillItemLink(index)
 	local spellID = GetSpellID(recipeLink) or GetSpellID(outputLink)
+	local isEnchant = match(outputLink or recipeLink or "", "enchant:") ~= nil
 	local outputItemID = isCraft and GetCraftOutputItemID(name, outputLink, spellID)
 		or addon:GetItemID(outputLink)
-	if isWrath and enchantingScrollData and spellID and not outputItemID then
+	if isEnchant and enchantingScrollData and spellID and not outputItemID then
 		outputItemID = enchantingScrollData:GetEnchant(spellID)
+	end
+	local alchemyCategory, expansionID
+	if isAlchemy then
+		local ready
+		alchemyCategory, expansionID, ready = module:GetAlchemyRecipeData(
+			outputItemID, altVerb ~= nil and altVerb ~= "")
+		if not ready then
+			return nil, nil, false
+		end
 	end
 	local minMade, maxMade
 	if isCraft then
-		-- Classic's separate Craft frame is used for direct enchants. Those recipes
-		-- have a conceptual output of one enchant even though no item is created.
 		minMade, maxMade = 1, 1
 	else
 		minMade, maxMade = GetTradeSkillNumMade(index)
 	end
 	minMade = minMade and minMade > 0 and minMade or 1
 	maxMade = maxMade and maxMade > 0 and maxMade or minMade
-
-	-- Some Classic Era profession views return no recipe hyperlink even though
-	-- their result and reagents are available. The output index only needs a
-	-- stable key within this snapshot; spell tooltips remain indexed only when
-	-- Blizzard supplies the real spell ID.
+	local reagents, complete = ReadReagents(index, isCraft)
+	if not complete then
+		return nil, nil, false
+	end
 	local recipeKey = spellID or "recipe:" .. name
 	return recipeKey, {
 		name = name,
 		spellID = spellID,
 		outputItemID = outputItemID,
-		alchemyMastery = GetAlchemyMastery(outputItemID, altVerb),
+		isEnchant = isEnchant,
+		alchemyCategory = alchemyCategory,
+		expansionID = expansionID,
 		minMade = minMade,
 		maxMade = maxMade,
-		reagents = ReadReagents(index, isCraft),
-	}
+		reagents = reagents,
+	}, true
 end
 
 local function IsLinkedProfession()
@@ -292,43 +231,45 @@ end
 
 local function SaveProfession(name, currentLevel, maxLevel, recipes)
 	if not name or name == "" or name == UNKNOWN then
-		return
+		return false
 	end
-	local characterKey = GetPlayerCharacterKey()
-	if not characterKey then
-		return
-	end
-	local skillLineID, isPrimary, specializationIndex = GetProfessionIdentity(name)
+	local skillLineID, isPrimary = GetProfessionIdentity(name)
 	local skillLines = ReadSkillLines()
 	local skillLineName = skillLines and ResolveSkillLineName(name, skillLines)
-	local character = addon.db.factionrealm.knownProfessions[characterKey]
-	-- GetProfessions omits some Classic Craft-frame categories, including First
-	-- Aid. Their localized names remain safe fallback keys; verified skillLineName
-	-- values still allow reconciliation to remove them if Blizzard does.
-	local professionKey = skillLineID or name
-	character[professionKey] = {
+	return module:SaveProfession(skillLineID or name, {
+		collector = "classic",
 		name = name,
 		skillLineID = skillLineID,
 		skillLineName = skillLineName,
 		isPrimary = isPrimary,
-		specializationIndex = specializationIndex,
-		build = currentBuild,
+		alchemyMastery = skillLineID == ALCHEMY_SKILL_LINE
+			and module:GetActiveAlchemyMastery() or nil,
 		currentLevel = currentLevel,
 		maxLevel = maxLevel,
-		lastScan = GetTimestamp(),
 		recipes = recipes,
-	}
-	recipeRevision = recipeRevision + 1
+	})
+end
+
+local function RestoreTradeSkillHeaders(collapsedHeaders)
+	for index = GetNumTradeSkills(), 1, -1 do
+		local headerName, headerType = GetTradeSkillInfo(index)
+		if headerType == "header" and collapsedHeaders[headerName] then
+			CollapseTradeSkillSubClass(index)
+		end
+	end
 end
 
 local function ScanTradeSkill()
-	if IsLinkedProfession() then
-		return
+	if scanningTradeSkill or IsLinkedProfession() then
+		return true
 	end
 	local name, currentLevel, maxLevel = GetTradeSkillLine()
 	if not name or name == UNKNOWN or not maxLevel or maxLevel == 0 then
-		return
+		return false
 	end
+	scanningTradeSkill = true
+	local skillLineID = GetProfessionIdentity(name)
+	local isAlchemy = skillLineID == ALCHEMY_SKILL_LINE
 	local collapsedHeaders = {}
 	for index = 1, GetNumTradeSkills() do
 		local headerName, headerType, _, isExpanded = GetTradeSkillInfo(index)
@@ -339,35 +280,50 @@ local function ScanTradeSkill()
 	if next(collapsedHeaders) then
 		ExpandTradeSkillSubClass(0)
 	end
-
 	local recipes = {}
+	local complete = true
+	local recipeCount = 0
 	for index = 1, GetNumTradeSkills() do
 		local recipeName, recipeType, _, _, altVerb = GetTradeSkillInfo(index)
 		if recipeName and recipeType ~= "header" and recipeType ~= "subheader" then
-			local recipeKey, recipe = ReadRecipe(index, recipeName, false, altVerb)
-			if recipeKey then
-				recipes[recipeKey] = recipe
+			local recipeKey, recipe, recipeComplete = ReadRecipe(
+				index, recipeName, false, altVerb, isAlchemy)
+			if not recipeComplete then
+				complete = false
+				break
 			end
+			recipes[recipeKey] = recipe
+			recipeCount = recipeCount + 1
 		end
 	end
-	SaveProfession(name, currentLevel, maxLevel, recipes)
-	if next(collapsedHeaders) then
-		for index = GetNumTradeSkills(), 1, -1 do
-			local headerName, headerType = GetTradeSkillInfo(index)
-			if headerType == "header" and collapsedHeaders[headerName] then
-				CollapseTradeSkillSubClass(index)
-			end
+	complete = complete and recipeCount > 0
+	if complete then
+		SaveProfession(name, currentLevel, maxLevel, recipes)
+	end
+	RestoreTradeSkillHeaders(collapsedHeaders)
+	ignoreTradeSkillUpdatesUntil = GetTime() + 0.25
+	scanningTradeSkill = false
+	return complete
+end
+
+local function RestoreCraftHeaders(collapsedHeaders)
+	for index = GetNumCrafts(), 1, -1 do
+		local headerName, _, headerType = GetCraftInfo(index)
+		if headerType == "header" and collapsedHeaders[headerName] then
+			CollapseCraftSkillLine(index)
 		end
 	end
 end
 
 local function ScanCraft()
-	-- GetCraftDisplaySkillLine is nil for the hunter pet-training window, which
-	-- also uses CraftFrame. This keeps that unrelated spell list out of professions.
+	if scanningCraft then
+		return true
+	end
 	local name = GetCraftDisplaySkillLine()
 	if not name then
-		return
+		return true
 	end
+	scanningCraft = true
 	local collapsedHeaders = {}
 	for index = 1, GetNumCrafts() do
 		local headerName, _, headerType, _, isExpanded = GetCraftInfo(index)
@@ -379,324 +335,60 @@ local function ScanCraft()
 		ExpandCraftSkillLine(0)
 	end
 	local recipes = {}
+	local complete = true
+	local recipeCount = 0
 	for index = 1, GetNumCrafts() do
 		local recipeName, _, recipeType = GetCraftInfo(index)
 		if recipeName and recipeType ~= "header" and recipeType ~= "subheader" then
-			local recipeKey, recipe = ReadRecipe(index, recipeName, true)
-			if recipeKey then
-				recipes[recipeKey] = recipe
+			local recipeKey, recipe, recipeComplete = ReadRecipe(index, recipeName, true)
+			if not recipeComplete then
+				complete = false
+				break
 			end
+			recipes[recipeKey] = recipe
+			recipeCount = recipeCount + 1
 		end
 	end
-	SaveProfession(name, nil, nil, recipes)
-	if next(collapsedHeaders) then
-		for index = GetNumCrafts(), 1, -1 do
-			local headerName, _, headerType = GetCraftInfo(index)
-			if headerType == "header" and collapsedHeaders[headerName] then
-				CollapseCraftSkillLine(index)
-			end
-		end
+	complete = complete and recipeCount > 0
+	if complete then
+		SaveProfession(name, nil, nil, recipes)
 	end
+	RestoreCraftHeaders(collapsedHeaders)
+	ignoreCraftUpdatesUntil = GetTime() + 0.25
+	scanningCraft = false
+	return complete
 end
 
-local function ResolveKnownCraftOutput(itemID, currentCharacterOnly)
-	local itemName = C_Item.GetItemInfo(itemID)
-	if not itemName then
+local QueueTradeSkillScan, QueueCraftScan
+
+-- A zero-second timer defers scanning until the next frame, after Blizzard
+-- finishes the current profession event. Bounded retries wait for missing data.
+QueueTradeSkillScan = function(delay, attempt)
+	if tradeSkillScanPending then
 		return
 	end
-	local characterKey = GetPlayerCharacterKey()
-	local resolved
-	for characterName, professions in pairs(addon.db.factionrealm.knownProfessions) do
-		if not currentCharacterOnly or characterName == characterKey then
-			for _, profession in pairs(professions) do
-				for _, recipe in pairs(profession.recipes or {}) do
-					if not recipe.outputItemID and recipe.name == itemName then
-						recipe.outputItemID = itemID
-						resolved = true
-					end
-				end
-			end
+	tradeSkillScanPending = true
+	C_Timer.After(delay or 0, function()
+		tradeSkillScanPending = false
+		attempt = attempt or 1
+		if not ScanTradeSkill() and attempt < 6 then
+			QueueTradeSkillScan(0.2, attempt + 1)
 		end
-	end
-	if resolved then
-		recipeRevision = recipeRevision + 1
-	end
+	end)
 end
 
-local function BuildRecipeIndex(currentCharacterOnly, outputItemID)
-	local characterKey = GetPlayerCharacterKey()
-	local cacheKey = currentCharacterOnly and "character" or "factionrealm"
-	local cached = recipeIndexes[cacheKey]
-	if outputItemID and (not cached or not cached.recipesByOutput[outputItemID]) then
-		-- The hovered item is necessarily cached, so it can resolve an Enchanting
-		-- craft which was not in the item cache when its profession was scanned.
-		ResolveKnownCraftOutput(outputItemID, currentCharacterOnly)
-		cached = recipeIndexes[cacheKey]
-	end
-	if cached and cached.revision == recipeRevision then
-		return cached.recipesBySpell, cached.recipesByOutput
-	end
-	local recipesBySpell = {}
-	local recipesByOutput = {}
-	for characterName, professions in pairs(addon.db.factionrealm.knownProfessions) do
-		if not currentCharacterOnly or characterName == characterKey then
-			for _, profession in pairs(professions) do
-				for recipeKey, recipe in pairs(profession.recipes or {}) do
-					local spellID = recipe.spellID
-					if spellID == nil and type(recipeKey) == "number" then
-						spellID = recipeKey
-					end
-					local entry = {
-						character = characterName,
-						profession = profession.name,
-						skillLineID = profession.skillLineID,
-						specializationIndex = profession.specializationIndex,
-						stale = profession.build ~= currentBuild,
-						spellID = spellID,
-						recipe = recipe,
-					}
-					-- A current-build scan is authoritative for a specific spell. The
-					-- older snapshot remains available only when no fresh copy exists.
-					local indexed = spellID and recipesBySpell[spellID]
-					if spellID and (not indexed or indexed.stale and not entry.stale) then
-						recipesBySpell[spellID] = entry
-					end
-					if recipe.outputItemID then
-						local outputs = recipesByOutput[recipe.outputItemID]
-						if not outputs then
-							outputs = {}
-							recipesByOutput[recipe.outputItemID] = outputs
-						end
-						outputs[#outputs + 1] = entry
-					end
-				end
-			end
-		end
-	end
-	recipeIndexes[cacheKey] = {
-		revision = recipeRevision,
-		recipesBySpell = recipesBySpell,
-		recipesByOutput = recipesByOutput,
-	}
-	return recipesBySpell, recipesByOutput
-end
-
-local function Calculate(auctionDB, currentCharacterOnly, outputItemID, allowMastery)
-	local recipesBySpell, recipesByOutput = BuildRecipeIndex(currentCharacterOnly, outputItemID)
-	local itemCache = {}
-	local recipeCache = {}
-	local visitingItems = {}
-	local visitingRecipes = {}
-	local GetItemCost, GetRecipeCost
-	-- Multiple recipes can create the same item. Once any current-build recipe is
-	-- known, older-build alternatives no longer participate in the minimum cost.
-	local function HasFreshRecipe(entries)
-		for index = 1, #entries do
-			if not entries[index].stale then
-				return true
-			end
-		end
-		return false
-	end
-
-	local function Consider(best, value, source, detail)
-		if value and value > 0 and (not best or value < best.value) then
-			return { value = value, source = source, detail = detail }
-		end
-		return best
-	end
-
-	function GetRecipeCost(entry)
-		local cached = recipeCache[entry]
-		if cached ~= nil then
-			return cached or nil
-		end
-		if visitingRecipes[entry] then
-			return
-		end
-		visitingRecipes[entry] = true
-		local total = 0
-		local materials = {}
-		for itemID, quantity in pairs(entry.recipe.reagents) do
-			local material = GetItemCost(itemID)
-			if not material then
-				visitingRecipes[entry] = nil
-				recipeCache[entry] = false
-				return
-			end
-			local subtotal = material.value * quantity
-			total = total + subtotal
-			materials[#materials + 1] = {
-				itemID = itemID,
-				quantity = quantity,
-				unitValue = material.value,
-				totalValue = subtotal,
-				source = material.source,
-				detail = material.detail,
-			}
-		end
-		local vellumItemIDs
-		if isWrath and enchantingScrollData then
-			vellumItemIDs = select(2, enchantingScrollData:GetEnchant(entry.spellID))
-		end
-		if vellumItemIDs then
-			local cheapest
-			local cheapestItemID
-			for index = 1, #vellumItemIDs do
-				local itemID = vellumItemIDs[index]
-				local material = GetItemCost(itemID)
-				if material and (not cheapest or material.value < cheapest.value) then
-					cheapest = material
-					cheapestItemID = itemID
-				end
-			end
-			if not cheapest then
-				visitingRecipes[entry] = nil
-				recipeCache[entry] = false
-				return
-			end
-			total = total + cheapest.value
-			materials[#materials + 1] = {
-				itemID = cheapestItemID,
-				quantity = 1,
-				unitValue = cheapest.value,
-				totalValue = cheapest.value,
-				source = cheapest.source,
-				detail = cheapest.detail,
-			}
-		end
-		sort(materials, function(left, right)
-			return left.itemID < right.itemID
-		end)
-		visitingRecipes[entry] = nil
-		local outputQuantity = (entry.recipe.minMade + entry.recipe.maxMade) / 2
-		local masteryYield = GetMasteryYield(entry, allowMastery)
-		local result = {
-			-- Mastery affects the expected auction return from the finished recipe,
-			-- not its reagent requirements or its baseline crafting cost. Keep the
-			-- multiplier as metadata so callers can apply it only to that return.
-			value = total / outputQuantity,
-			totalReagentValue = total,
-			outputQuantity = outputQuantity,
-			character = entry.character,
-			profession = entry.profession,
-			skillLineID = entry.skillLineID,
-			specializationIndex = entry.specializationIndex,
-			alchemyMastery = entry.recipe.alchemyMastery,
-			masteryYield = masteryYield,
-			stale = entry.stale,
-			spellID = entry.spellID,
-			outputItemID = entry.recipe.outputItemID,
-			name = entry.recipe.name,
-			materials = materials,
-		}
-		recipeCache[entry] = result
-		return result
-	end
-
-	function GetItemCost(itemID)
-		local cached = itemCache[itemID]
-		if cached ~= nil then
-			return cached or nil
-		end
-		if visitingItems[itemID] then
-			return
-		end
-		visitingItems[itemID] = true
-		local best
-		local marketValue, marketSource = addon:GetFirstMarketValue(auctionDB and auctionDB[itemID])
-		best = Consider(best, marketValue, "market", marketSource)
-		best = Consider(best, addon.db.global.vendorBuyPrices[itemID], "vendor")
-
-		-- Conversion prices deliberately use the source material's market value,
-		-- not its vendor or crafting value. Those remain independent candidates in
-		-- the outer minimum calculation and cannot feed conversion loops.
-		local conversions = convertData:GetConversions(itemID)
-		if conversions then
-			for sourceItemID, quantity in pairs(conversions) do
-				local sourceValue, sourceField = addon:GetFirstMarketValue(
-					auctionDB and auctionDB[sourceItemID])
-				best = Consider(best, sourceValue and sourceValue * quantity, "convert", {
-					itemID = sourceItemID,
-					quantity = quantity,
-					priceSource = sourceField,
-				})
-			end
-		end
-
-		local outputRecipes = recipesByOutput[itemID] or {}
-		local hasFreshRecipe = HasFreshRecipe(outputRecipes)
-		for index = 1, #outputRecipes do
-			local entry = outputRecipes[index]
-			if not hasFreshRecipe or not entry.stale then
-				local recipe = GetRecipeCost(entry)
-				best = Consider(best, recipe and recipe.value, "crafting", recipe)
-			end
-		end
-		visitingItems[itemID] = nil
-		itemCache[itemID] = best or false
-		return best
-	end
-
-	return {
-		GetItem = function(_, itemID)
-			return GetItemCost(itemID)
-		end,
-		GetRecipe = function(_, spellID)
-			local entry = recipesBySpell[spellID]
-			return entry and GetRecipeCost(entry)
-		end,
-		GetRecipesForItem = function(_, itemID)
-			local results = {}
-			local outputRecipes = recipesByOutput[itemID] or {}
-			local hasFreshRecipe = HasFreshRecipe(outputRecipes)
-			for index = 1, #outputRecipes do
-				local entry = outputRecipes[index]
-				if not hasFreshRecipe or not entry.stale then
-					local result = GetRecipeCost(entry)
-					if result then
-						results[#results + 1] = result
-					end
-				end
-			end
-			return results
-		end,
-	}
-end
-
-function module:GetCharacterName()
-	return GetPlayerCharacterKey()
-end
-
-function module:IsItemKnown(itemID, currentCharacterOnly)
-	local _, recipesByOutput = BuildRecipeIndex(currentCharacterOnly, itemID)
-	return recipesByOutput[itemID] ~= nil
-end
-
-function module:IsRecipeKnown(spellID, currentCharacterOnly)
-	local recipesBySpell = BuildRecipeIndex(currentCharacterOnly)
-	return recipesBySpell[spellID] ~= nil
-end
-
-local function GetKnownRecipeSpellID(name)
-	if not name then
+QueueCraftScan = function(delay, attempt)
+	if craftScanPending then
 		return
 	end
-	local characterKey = GetPlayerCharacterKey()
-	if not characterKey then
-		return
-	end
-	local professions = addon.db.factionrealm.knownProfessions[characterKey]
-	if not professions then
-		return
-	end
-	for _, profession in pairs(professions) do
-		for recipeKey, recipe in pairs(profession.recipes or {}) do
-			if recipe.name == name then
-				return recipe.spellID or type(recipeKey) == "number" and recipeKey or nil
-			end
+	craftScanPending = true
+	C_Timer.After(delay or 0, function()
+		craftScanPending = false
+		attempt = attempt or 1
+		if not ScanCraft() and attempt < 6 then
+			QueueCraftScan(0.2, attempt + 1)
 		end
-	end
+	end)
 end
 
 function module:GetCraftRecipeSpellID(index)
@@ -704,10 +396,7 @@ function module:GetCraftRecipeSpellID(index)
 	if spellID then
 		return spellID
 	end
-	-- Classic's Craft frame can stop returning a recipe hyperlink after another
-	-- profession UI takes ownership of the frame. Its visible row name remains
-	-- available, so resolve that name against this character's scanned snapshot.
-	return GetKnownRecipeSpellID(GetCraftInfo(index))
+	return self:GetKnownRecipeSpellID(GetCraftInfo(index))
 end
 
 function module:GetTradeSkillRecipeSpellID(index)
@@ -715,50 +404,40 @@ function module:GetTradeSkillRecipeSpellID(index)
 	if spellID then
 		return spellID
 	end
-	return GetKnownRecipeSpellID(GetTradeSkillInfo(index))
-end
-
-function module:GetItemCrafting(itemID, auctionDB, currentCharacterOnly, allowMastery)
-	local calculator = Calculate(auctionDB, currentCharacterOnly, itemID, allowMastery)
-	local best
-	local recipes = calculator:GetRecipesForItem(itemID)
-	for index = 1, #recipes do
-		local result = recipes[index]
-		if not best or result.value < best.value
-			or result.value == best.value and result.masteryYield > best.masteryYield then
-			best = result
-		end
-	end
-	return best
-end
-
-function module:GetRecipeCrafting(spellID, auctionDB, currentCharacterOnly, allowMastery)
-	return Calculate(auctionDB, currentCharacterOnly, nil, allowMastery):GetRecipe(spellID)
-end
-
-function module:GetMaterialCost(itemID, auctionDB, currentCharacterOnly, allowMastery)
-	return Calculate(auctionDB, currentCharacterOnly, nil, allowMastery):GetItem(itemID)
+	return self:GetKnownRecipeSpellID(GetTradeSkillInfo(index))
 end
 
 function module:TRADE_SKILL_SHOW()
-	C_Timer.After(0, ScanTradeSkill)
+	QueueTradeSkillScan()
+end
+
+function module:TRADE_SKILL_UPDATE()
+	if not scanningTradeSkill and GetTime() >= ignoreTradeSkillUpdatesUntil then
+		QueueTradeSkillScan(0.05)
+	end
 end
 
 function module:CRAFT_SHOW()
-	C_Timer.After(0, ScanCraft)
+	QueueCraftScan()
+end
+
+function module:CRAFT_UPDATE()
+	if not scanningCraft and GetTime() >= ignoreCraftUpdatesUntil then
+		QueueCraftScan(0.05)
+	end
 end
 
 function module:SKILL_LINES_CHANGED()
-	-- Blizzard updates the spellbook and profession slots during this event. Waiting
-	-- one frame ensures the reconciliation observes their completed state.
+	-- Let Blizzard finish updating skill lines before pruning saved professions.
 	C_Timer.After(0, ReconcileProfessions)
 end
 
 function module:OnEnable()
 	self:RegisterEvent("TRADE_SKILL_SHOW")
+	self:RegisterEvent("TRADE_SKILL_UPDATE")
 	self:RegisterEvent("CRAFT_SHOW")
+	self:RegisterEvent("CRAFT_UPDATE")
 	self:RegisterEvent("SKILL_LINES_CHANGED")
-	-- AceAddon enables ordinary modules during PLAYER_LOGIN, so this performs the
-	-- initial reconciliation without registering the event a second time.
+	-- Defer login reconciliation until Blizzard's skill-line data has settled.
 	C_Timer.After(0, ReconcileProfessions)
 end

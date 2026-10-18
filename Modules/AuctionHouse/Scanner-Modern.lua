@@ -4,11 +4,12 @@ local LibStub = LibStub
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("Scanner")
+local usesSharedAuctionHouse = addon.UsesSharedAuctionHouse
 
 -- Modern clients require commodity and item search workflows rather than the
 -- paged or replicated Classic scan. Keep the shared contract safe meanwhile.
 function module:GetAuctionScope()
-	if addon.UsesSharedAuctionHouse then
+	if usesSharedAuctionHouse then
 		return "realm"
 	end
 end

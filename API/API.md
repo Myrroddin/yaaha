@@ -191,11 +191,11 @@ Each function accepts `(itemID, auctionHouseType)` using the same validation, op
 
 | Function | Return type | Description |
 | --- | --- | --- |
-| `GetRealmSaleRate()` | `number` or `nil` | Fraction of resolved auction quantities sold during the current rolling 24-hour realm-data window. |
-| `GetRealmSoldPerDay()` | `number` or `nil` | Number of individual items sold during the current rolling 24-hour realm-data window. |
-| `GetRealmAverageSaleValue()` | `number` or `nil` | Average gross per-unit auction sale value in copper during the current rolling 24-hour realm-data window. |
+| `GetRealmSaleRate()` | `number` or `nil` | Fraction of resolved auction quantities sold during the rolling 60-day realm-data window. |
+| `GetRealmSoldPerDay()` | `number` or `nil` | Average number of individual items sold per day across the rolling 60-day realm-data window. |
+| `GetRealmAverageSaleValue()` | `number` or `nil` | Average gross per-unit auction sale value in copper during the rolling 60-day realm-data window. |
 
-Realm data expires 24 hours after each qualifying observation. Faction-separated clients keep Alliance, Horde, and Neutral observations isolated. Mists and Retail use their single shared market. These functions return `nil` when the requested value is unavailable or expired. A known current sale rate or sold quantity may validly be zero.
+Each observation expires exactly 60 days after its recorded outcome. The private personal sale rate uses the same rolling window. Faction-separated clients keep Alliance, Horde, and Neutral observations isolated. Mists and Retail use their single shared market. These functions return `nil` when the requested value is unavailable or every observation has expired. A known sale rate or daily sold quantity may validly be zero.
 
 ### Disenchanting functions
 
@@ -205,11 +205,11 @@ Disenchanting results are universal and are not separated by auction-house type.
 | --- | --- | --- |
 | `IsDisenchantable(itemID)` | `boolean` | Whether YAAHA recognizes the item as disenchantable and has a result range for it. |
 | `GetDisenchantResults(itemID)` | `table` or `nil` | A defensive copy of the item's possible materials, probabilities, quantity ranges, expected quantities, required skill, and learned sample count. |
-| `GetDisenchantValue(itemID, auctionHouseType, fullResults)` | `number`, `table`, or `nil` | Expected value using prices from the selected auction house. Pass `true` for the complete priced breakdown. Missing prices make the total unavailable. |
+| `GetDisenchantValue(itemID, auctionHouseType, fullResults)` | `number`, `table`, or `nil` | Expected value using current prices from the selected auction house's latest scan. Pass `true` for the complete priced breakdown. Missing prices make the total unavailable. |
 
 `GetDisenchantResults()` returns `YAAHA_API.DisenchantResults`. Each `YAAHA_API.DisenchantMaterial` entry in its `results` array contains `itemID`, `chance`, `minQuantity`, `maxQuantity`, and `expectedQuantity`. `chance` is a decimal fraction. `expectedQuantity` already includes the probability of receiving that material.
 
-`sampleCount` is the number of disenchantments YAAHA has personally observed for that item category and level range. These learned observations supplement YAAHA's built-in probabilities on every supported game client. A value of `0` means the result still relies entirely on the built-in dataset; a larger value means player-observed results have increasingly contributed to the estimate.
+`sampleCount` is the number of local and synchronized disenchantments YAAHA has learned for that item category and level range. These observations supplement YAAHA's built-in probabilities on every supported game client. A value of `0` means the result still relies entirely on the built-in dataset; a larger value means observed results have increasingly contributed to the estimate.
 
 For each material, expected value uses the first positive source in this order: `currentMarketValue`, `midweekMarketValue`, `weeklyMarketValue`, `biweeklyMarketValue`, `monthlyMarketValue`, then `bimonthlyMarketValue`. Minimum bid and minimum buyout are never used as substitutes.
 
@@ -238,7 +238,7 @@ if results then
 end
 ```
 
-When `fullResults` is `false` or omitted, `GetDisenchantValue()` returns the summed expected value in copper. It returns `nil` when any possible material lacks a positive market value, because a partial sum could be mistaken for a complete valuation.
+When `fullResults` is `false` or omitted, `GetDisenchantValue()` returns the summed expected value in copper. It returns `nil` when any possible material lacks a positive current market value in the latest scan, because a historical price or partial sum could be mistaken for materials the player can presently obtain or sell.
 
 When `fullResults` is `true`, the function returns a new `YAAHA_API.PricedDisenchantResults` table containing `expectedValue`, `requiredSkill`, `sampleCount`, and a `results` array. The top-level `expectedValue` is `nil` when any material price is missing, while the individual known material values remain available in `results`. Each `YAAHA_API.PricedDisenchantMaterial` contains:
 
@@ -272,7 +272,7 @@ YAAHA records recipes when the current character opens a profession window. Craf
 | `itemID` or `spellID` | `number` | Positive integer identifying the crafted item or recipe spell. |
 | `auctionHouseType` | `string` or `nil` | Optional auction-house type using the same rules as `GetItemData()`. |
 | `fullResults` | `boolean` or `nil` | `true` returns the priced recipe and reagent breakdown; otherwise only the per-unit crafting value is returned. |
-| `currentCharacterOnly` | `boolean` or `nil` | `true` restricts recipes to the logged-in character; otherwise all recorded same-faction characters are considered. |
+| `currentCharacterOnly` | `boolean` or `nil` | `true` restricts recipes to the logged-in character; otherwise all recorded same-faction characters on the realm are considered. |
 
 #### Crafting examples
 
@@ -291,15 +291,23 @@ if results then
 end
 ```
 
-For every reagent, YAAHA independently considers its first positive market value, unlimited-vendor price, conversion value, and recursively calculated crafting value. The least expensive available source is used. Conversion values use the converted source material's market value; they do not recursively reuse its vendor or crafting value.
+When a reagent used by a known recipe has a recorded unlimited-supply NPC price, YAAHA uses that vendor price. Opening a merchant refreshes the account-wide value with the current character's price, including reputation discounts. Auction listings do not override a dependable unlimited vendor source. Otherwise, YAAHA independently considers the reagent's current market value, conversion value, and recursively calculated crafting value, then uses the least expensive available source. Conversion values use the converted source material's current market value; they do not recursively reuse its vendor or crafting value.
 
-In Burning Crusade and Wrath/Titan, a recipe covered by the recorded alchemist's Potion, Elixir, or Transmutation mastery has an expected finished-item auction-return multiplier of `1.2`. Mastery does not change the recipe's required reagents, its crafting cost, or the cost of that item when it is used as a reagent in another recipe. It applies only when estimating the matching finished recipe's return in a market where that character can sell directly. Neutral and opposite-faction requests on faction-separated clients use the baseline return.
+Only when every real price and opportunity-cost source fails, YAAHA may estimate a Blizzard-identified Bind on Pickup or quest-bound reagent as `max(vendorSell, (expansionID + 1) * 1g)`. Blizzard numbers Vanilla as expansion `0`, so its fallback floor is `1g`; each subsequent expansion adds another `1g`. Tradeable reagents never use this fallback: a tradeable item absent from the current auction snapshot remains unavailable unless another valid acquisition path exists.
+
+On supported clients other than Classic Era and Forever, a recorded Potion, Elixir, or Transmutation mastery gives matching Vanilla-through-Mists Alchemy recipes an expected finished-item auction-return multiplier of `1.2`. A qualifying same-faction alchemist may supply that adjustment.
+
+A learned Rank 3 Legion or Battle for Azeroth Alchemy recipe uses an expected output multiplier of `1.4`. This recipe-specific adjustment is independent of the character's older mastery: the systems apply to different recipes and never stack. Warlords of Draenor recipes and Rank 1 or Rank 2 Legion and Battle for Azeroth recipes use the baseline multiplier of `1`.
+
+Expected output multipliers never change required reagents, crafting cost, material cost, or the cost of a crafted item when it is used as a reagent. They apply only when estimating the matching finished recipe's auction return.
+
+Neutral and opposite-faction requests on faction-separated clients use the baseline multiplier of `1` because the recorded alchemist cannot sell directly in those markets.
 
 In Wrath/Titan, an equipment-enchant result represents its auctionable scroll. Its crafting value includes the cheapest compatible armor or weapon vellum available through the same material-cost calculation. Classic Era and Burning Crusade equipment enchants retain their reagent cost but have no auctionable output item.
 
 Profession snapshots from an earlier game-client build are marked as stale. YAAHA prefers a current-build copy of a recipe whenever one is available, but retains a stale recipe as a fallback until that character opens the profession and refreshes it. Full crafting results expose this state to consumers.
 
-Variable-yield recipes divide the total reagent value by their average output. A recipe is unavailable when any required reagent has no usable price. All positive reagent subtotals and crafting values exposed by the API are rounded upward to the next whole copper. They never round down or use half-up rounding. A positive fractional value therefore becomes at least `1` copper, while unavailable data remains `nil`.
+Variable-yield recipes divide the total reagent value by their average output. A recipe is unavailable when any required reagent has no usable price. Each positive market, vendor, conversion, crafting, or applicable soulbound-fallback value is rounded to whole copper before use. Per-output crafting values and reagent subtotals exposed by the API use the same half-up rounding. A known nonzero value which would otherwise round to zero becomes `1` copper, while an exact zero remains zero and unavailable data remains `nil`.
 
 When `fullResults` is true, the returned `YAAHA_API.CraftingResult` is a defensive snapshot containing:
 
@@ -308,7 +316,7 @@ When `fullResults` is true, the returned `YAAHA_API.CraftingResult` is a defensi
 | `value` | `number` | Per-unit crafting value in copper. |
 | `totalReagentValue` | `number` | Total reagent value for one recipe cast. |
 | `outputQuantity` | `number` | Fixed output or average of the minimum and maximum output. |
-| `masteryYield` | `number` | Expected finished-item auction-return multiplier; `1` normally or `1.2` for a matching Alchemy mastery. It does not reduce crafting or material costs. |
+| `expectedOutputMultiplier` | `number` | Expected finished-item auction-return multiplier: `1` normally, `1.2` for an applicable legacy Alchemy mastery, or `1.4` for a learned Rank 3 Legion or Battle for Azeroth Alchemy recipe. It does not reduce crafting or material costs. |
 | `character` | `string` | Canonical character identity whose known recipe supplied the result (`name-realm` or Forever's `firstName-surname`). |
 | `profession` | `string` | Localized profession name. |
 | `stale` | `boolean` | Whether the profession snapshot predates the current game-client build. |
@@ -317,7 +325,7 @@ When `fullResults` is true, the returned `YAAHA_API.CraftingResult` is a defensi
 | `name` | `string` | Localized recipe name. |
 | `materials` | `table` | Reagent entries containing `itemID`, `quantity`, `unitValue`, `totalValue`, and the selected `source`. Conversion and nested crafting details are included when applicable. |
 
-The material `source` is exactly `"market"`, `"vendor"`, `"convert"`, or `"crafting"`. The two functions return `nil` when the recipe is unknown or a complete value cannot be calculated.
+The material `source` is exactly `"market"`, `"vendor"`, `"convert"`, `"crafting"`, or `"soulboundFallback"`. The last value is possible only for a Bind on Pickup or quest-bound reagent after every higher-priority source failed. The two functions return `nil` when the recipe is unknown or a complete value cannot be calculated.
 
 ## Callbacks
 

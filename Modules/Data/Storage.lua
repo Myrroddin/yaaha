@@ -2,7 +2,6 @@
 
 local C_AutoComplete = C_AutoComplete
 local C_EncodingUtil = C_EncodingUtil
-local AUCTION_HOUSE = AUCTION_HOUSE
 local Enum = Enum
 local FACTION_ALLIANCE = FACTION_ALLIANCE
 local FACTION_HORDE = FACTION_HORDE
@@ -21,6 +20,7 @@ local UnitFactionGroup = UnitFactionGroup
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("Storage", "AceEvent-3.0")
+local usesSharedAuctionHouse = addon.UsesSharedAuctionHouse
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
 local BASE64_VARIANT = Enum.Base64Variant.StandardUrlSafe
@@ -43,7 +43,7 @@ local function InitializeFactionScope(scopeDB)
 end
 
 local function ScopeName(scope)
-	return addon.UsesSharedAuctionHouse and AUCTION_HOUSE
+	return usesSharedAuctionHouse and L["Shared"]
 		or scope == "realm" and FACTION_NEUTRAL
 		or localizedPlayerFaction or playerFaction
 end

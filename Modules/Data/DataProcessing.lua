@@ -421,11 +421,13 @@ local function BuildDisenchantItem(itemID, scanData, priceDB)
 		auctions = {},
 	}
 	-- Equipment cannot stack, but identical copies at the same buyout are combined.
-	-- The live deal search still resolves and purchases each physical listing alone.
+	-- The live deal search still resolves, revalues, and purchases each physical
+	-- listing alone, so stale cached entries cannot bypass the current threshold.
 	for count, byCount in pairs(scanData.auctions) do
 		for _, byBid in pairs(byCount) do
 			for unitBuyout, numAuctions in pairs(byBid) do
-				if unitBuyout > 0 and unitBuyout <= disenchant.expectedValue then
+				if addon:IsBreakdownDeal(unitBuyout, disenchant.expectedValue,
+					addon.db.profile.disenchantingDealThreshold) then
 					local key = format("%d:%d", count, unitBuyout)
 					local auction = result.auctions[key]
 					if auction then

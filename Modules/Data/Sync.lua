@@ -1,10 +1,9 @@
--- Exchanges normalized auction snapshots and realm-sale observations only with
--- guild members who share the same auction house through a Connected Realm group.
+-- Exchanges normalized auction data, realm-sale observations, and learned material
+-- breakdown results only with guild members in the same Connected Realm group.
 
 local C_AutoComplete = C_AutoComplete
 local C_EncodingUtil = C_EncodingUtil
 local C_Timer = C_Timer
-local AUCTION_HOUSE = AUCTION_HOUSE
 local Enum = Enum
 local FACTION_ALLIANCE = FACTION_ALLIANCE
 local FACTION_HORDE = FACTION_HORDE
@@ -21,6 +20,7 @@ local pairs = pairs
 local pcall = pcall
 local random = math.random
 local sort = table.sort
+local stringByte = string.byte
 local stringGsub = string.gsub
 local stringLower = string.lower
 local tableConcat = table.concat
@@ -30,7 +30,14 @@ local UnitFactionGroup = UnitFactionGroup
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("Sync", "AceEvent-3.0")
+local isForever = addon.IsForever
+local usesSharedAuctionHouse = addon.UsesSharedAuctionHouse
 local dataProcessing = addon:GetModule("DataProcessing")
+local collectorModules = {
+	disenchantData = addon:GetModule("DisenchantingData"),
+	millingData = addon:GetModule("MillingData", true),
+	prospectData = addon:GetModule("ProspectingData", true),
+}
 local saleCollector = addon:GetModule("SaleCollector")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 local storage
@@ -41,6 +48,7 @@ local SYNC_DISTRIBUTION = "GUILD"
 local INITIAL_PULL_DELAY = 60
 local SECONDS_PER_DAY = 24 * 60 * 60
 local MAX_HISTORY_SECONDS = 60 * SECONDS_PER_DAY
+local SALE_HISTORY_SECONDS = 60 * SECONDS_PER_DAY
 local playerFaction = UnitFactionGroup("player")
 local playerName, playerFullName
 local BASE64_VARIANT = Enum.Base64Variant.StandardUrlSafe
@@ -48,7 +56,7 @@ local oppositeFaction = playerFaction == "Alliance" and "Horde" or "Alliance"
 -- Sync transports YAAHA's normalized data rather than Blizzard auction results.
 -- The wire key names the actual market. Faction-separated clients retain three
 -- markets, while Mists and Retail normalize every request to their shared house.
-local AUCTION_HOUSE_TYPES = addon.UsesSharedAuctionHouse
+local AUCTION_HOUSE_TYPES = usesSharedAuctionHouse
 	and { "Shared" } or { "Alliance", "Horde", "Neutral" }
 local SYNC_MARKET_FIELDS = {
 	"auctionCount",
@@ -58,6 +66,7 @@ local SYNC_MARKET_FIELDS = {
 	"minBid",
 	"minBuyout",
 }
+local COLLECTOR_KEYS = { "disenchantData", "millingData", "prospectData" }
 local pendingPulls = {}
 local seenPulls = {}
 local connectedRealmKey
@@ -65,17 +74,15 @@ local connectedRealmKey
 local function IsSelf(sender)
 	local normalizedSender = addon:NormalizeCharacterName(sender)
 	return normalizedSender == playerFullName
-		or not addon.IsForever and sender == playerName
+		or not isForever and sender == playerName
 end
 
 local function ScopeEnabled(auctionHouseType)
-	local synchronization = addon.db.profile.synchronization
-	if addon.UsesSharedAuctionHouse then
-		return auctionHouseType == "Shared" and synchronization.shared
+	if usesSharedAuctionHouse then
+		return auctionHouseType == "Shared"
 	end
-	return auctionHouseType == playerFaction and synchronization.currentFaction
-		or auctionHouseType == oppositeFaction and synchronization.oppositeFaction
-		or auctionHouseType == "Neutral" and synchronization.neutral
+	return auctionHouseType == "Alliance" or auctionHouseType == "Horde"
+		or auctionHouseType == "Neutral"
 end
 
 -- Wire scopes name the auction house itself, never its relationship to the
@@ -83,7 +90,7 @@ end
 -- Alliance character sends it. Only this function maps that stable identity to
 -- the current character's AceDB scopes.
 local function GetScopeDB(auctionHouseType, create)
-	if addon.UsesSharedAuctionHouse and auctionHouseType == "Shared" then
+	if usesSharedAuctionHouse and auctionHouseType == "Shared" then
 		return addon.db.realm, "realm"
 	elseif auctionHouseType == playerFaction then
 		return addon.db.factionrealm, "factionrealm"
@@ -97,18 +104,8 @@ local function GetScopeDB(auctionHouseType, create)
 	end
 end
 
-local function AnySyncEnabled()
-	local synchronization = addon.db.profile.synchronization
-	if addon.UsesSharedAuctionHouse then
-		return synchronization.shared
-	end
-	return synchronization.currentFaction
-		or synchronization.oppositeFaction
-		or synchronization.neutral
-end
-
 local function CanSyncNow()
-	return AnySyncEnabled() and IsInGuild() and not IsInInstance()
+	return addon.db.profile.syncData and IsInGuild() and not IsInInstance()
 end
 
 local function NormalizeRealmName(realm)
@@ -159,14 +156,18 @@ local function EncodePacket(kind, data)
 		realmGroup = realmGroup,
 		data = data,
 	})
+	-- Compressed output is binary. Base64 makes it safe for WoW's addon channel;
+	-- no raw table or serialized text is ever handed to AceComm.
 	local compressed = C_EncodingUtil.CompressString(serialized)
 	return C_EncodingUtil.EncodeBase64(compressed, BASE64_VARIANT)
 end
 
 local function DecodePacket(text)
-	if #text > 8 * 1024 * 1024 then
+	if type(text) ~= "string" or #text > 8 * 1024 * 1024 then
 		return
 	end
+	-- Reverse the channel-safe encoding and compression before deserializing.
+	-- OnCommReceived protects this entire path because peer data is untrusted.
 	local decoded = C_EncodingUtil.DecodeBase64(text, BASE64_VARIANT)
 	local decompressed = C_EncodingUtil.DecompressString(decoded)
 	local success, packet = addon:Deserialize(decompressed)
@@ -185,14 +186,137 @@ local function SendPacket(kind, data, priority)
 	end
 end
 
+local function GetCollectorSourceID()
+	return addon:GetSyncSourceID()
+end
+
+local function BuildCollectorData()
+	-- Only learned observations cross the wire. Every installation already has
+	-- the same client-specific baseline tables, so serializing them would add
+	-- traffic and incorrectly multiply their virtual sample weight.
+	local collections = {}
+	local ownSourceID = GetCollectorSourceID()
+	for index = 1, #COLLECTOR_KEYS do
+		local savedKey = COLLECTOR_KEYS[index]
+		local dataModule = collectorModules[savedKey]
+		if dataModule then
+			local bySource = {}
+			local syncedBySource = addon.db.global.collectorSyncData[savedKey]
+			for sourceID, learnedData in pairs(syncedBySource) do
+				if sourceID ~= ownSourceID then
+					local sanitized = dataModule:SanitizeLearnedData(learnedData)
+					if sanitized then
+						bySource[sourceID] = sanitized
+					else
+						syncedBySource[sourceID] = nil
+					end
+				end
+			end
+			local ownData = dataModule:SanitizeLearnedData(addon.db.global[savedKey])
+			if ownData then
+				bySource[ownSourceID] = ownData
+			end
+			if next(bySource) then
+				collections[savedKey] = bySource
+			end
+		end
+	end
+	return collections
+end
+
+local function LearnedKeyValue(key)
+	if type(key) == "number" then
+		return key
+	end
+	if type(key) ~= "string" then
+		return 0
+	end
+	local value = 0
+	for index = 1, #key do
+		value = value + stringByte(key, index) * index
+	end
+	return value
+end
+
+local function CollectorSignature(collections)
+	local parts = {}
+	for index = 1, #COLLECTOR_KEYS do
+		local savedKey = COLLECTOR_KEYS[index]
+		for sourceID, learnedData in pairs(type(collections) == "table"
+			and collections[savedKey] or {}) do
+			local entryCount, keyTotal, materialTotal = 0, 0, 0
+			local sampleCount, occurrenceTotal, quantityTotal = 0, 0, 0
+			for learnedKey, learned in pairs(learnedData) do
+				entryCount = entryCount + 1
+				keyTotal = keyTotal + LearnedKeyValue(learnedKey)
+				sampleCount = sampleCount + learned.samples
+				for materialID, observation in pairs(learned.results) do
+					materialTotal = materialTotal + materialID
+					occurrenceTotal = occurrenceTotal + observation.occurrences
+					quantityTotal = quantityTotal + observation.quantity
+				end
+			end
+			parts[#parts + 1] = tableConcat({ savedKey, sourceID, entryCount,
+				keyTotal, materialTotal, sampleCount, occurrenceTotal, quantityTotal }, ":")
+		end
+	end
+	sort(parts)
+	return tableConcat(parts, "|")
+end
+
+local function CollectorSampleCount(collections)
+	local samples = 0
+	for index = 1, #COLLECTOR_KEYS do
+		local savedKey = COLLECTOR_KEYS[index]
+		for _, learnedData in pairs(type(collections) == "table"
+			and collections[savedKey] or {}) do
+			for _, learned in pairs(learnedData) do
+				samples = samples + learned.samples
+			end
+		end
+	end
+	return samples
+end
+
+local function MergeCollectorData(incomingCollections)
+	-- Preserve one cumulative snapshot per opaque installation ID. Relayed copies
+	-- then replace, rather than double-count, observations learned at their source.
+	local received = false
+	local ownSourceID = GetCollectorSourceID()
+	for index = 1, #COLLECTOR_KEYS do
+		local savedKey = COLLECTOR_KEYS[index]
+		local dataModule = collectorModules[savedKey]
+		local incomingBySource = type(incomingCollections) == "table"
+			and incomingCollections[savedKey]
+		if dataModule and type(incomingBySource) == "table" then
+			local storedBySource = addon.db.global.collectorSyncData[savedKey]
+			for sourceID, learnedData in pairs(incomingBySource) do
+				if type(sourceID) == "string" and sourceID ~= "" and sourceID ~= ownSourceID then
+					local sanitized, incomingSamples = dataModule:SanitizeLearnedData(learnedData)
+					if sanitized then
+						local _, storedSamples = dataModule:SanitizeLearnedData(storedBySource[sourceID])
+						if incomingSamples > storedSamples then
+							storedBySource[sourceID] = sanitized
+							received = true
+						end
+					end
+				end
+			end
+		end
+	end
+	return received
+end
+
 local function GetSaleIDs(saleData)
 	local ids = {}
 	local now = GetServerTime()
 	for index = 1, #(saleData.observations or {}) do
 		local observation = saleData.observations[index]
-		if (observation.source == "seller" or observation.source == "failure")
-			and observation.syncID and observation.timestamp
-			and now - observation.timestamp < SECONDS_PER_DAY then
+		if type(observation) == "table" and observation.privateSafe == true
+			and (observation.source == "seller" or observation.source == "failure")
+			and type(observation.syncID) == "string"
+			and type(observation.timestamp) == "number" and observation.timestamp <= now
+			and now - observation.timestamp < SALE_HISTORY_SECONDS then
 			ids[observation.syncID] = true
 		end
 	end
@@ -241,7 +365,10 @@ local function BuildScopeSummary(scopeDB, realmSales)
 	for itemID, saleData in pairs(realmSales) do
 		for index = 1, #(saleData.observations or {}) do
 			local observation = saleData.observations[index]
-			if observation.timestamp and now - observation.timestamp < SECONDS_PER_DAY then
+			if type(observation) == "table" and observation.privateSafe == true
+				and observation.timestamp
+				and observation.timestamp <= now
+				and now - observation.timestamp < SALE_HISTORY_SECONDS then
 				summary.saleCount = summary.saleCount + 1
 				summary.saleNewest = max(summary.saleNewest, observation.timestamp)
 				summary.saleTotal = summary.saleTotal + itemID + observation.timestamp
@@ -269,6 +396,49 @@ local function SummarySignature(summary)
 		values[index] = value
 	end
 	return tableConcat(values, ":")
+end
+
+local function AdvertisementSignature(advertisement)
+	local scopes = type(advertisement) == "table"
+		and type(advertisement.scopes) == "table" and advertisement.scopes or {}
+	local parts = {}
+	for index = 1, #AUCTION_HOUSE_TYPES do
+		local auctionHouseType = AUCTION_HOUSE_TYPES[index]
+		parts[#parts + 1] = auctionHouseType .. "="
+			.. SummarySignature(scopes[auctionHouseType])
+	end
+	parts[#parts + 1] = "collectors=" .. (type(advertisement) == "table"
+		and type(advertisement.collectorSignature) == "string"
+		and advertisement.collectorSignature or "")
+	return tableConcat(parts, "|")
+end
+
+local function AdvertisementFreshness(advertisement)
+	local freshness = 0
+	local scopes = type(advertisement) == "table"
+		and type(advertisement.scopes) == "table" and advertisement.scopes or {}
+	for _, summary in pairs(scopes) do
+		if SummarySignature(summary) ~= "" then
+			freshness = max(freshness, summary.lastScan, summary.historyNewest,
+				summary.saleNewest)
+		end
+	end
+	return freshness
+end
+
+local function AdvertisementCoverage(advertisement)
+	local coverage = type(advertisement) == "table"
+		and type(advertisement.collectorSamples) == "number"
+		and max(0, advertisement.collectorSamples) or 0
+	local scopes = type(advertisement) == "table"
+		and type(advertisement.scopes) == "table" and advertisement.scopes or {}
+	for _, summary in pairs(scopes) do
+		if SummarySignature(summary) ~= "" then
+			coverage = coverage + summary.historyCount + summary.saleCount
+				+ summary.snapshotCount
+		end
+	end
+	return coverage
 end
 
 local function BuildAdvertisement()
@@ -322,11 +492,15 @@ local function CopySaleDelta(saleData, wantedIDs)
 	local now = GetServerTime()
 	for index = 1, #(saleData.observations or {}) do
 		local observation = saleData.observations[index]
-		if (observation.source == "seller" or observation.source == "failure") and observation.syncID
+		if type(observation) == "table" and observation.privateSafe == true
+			and (observation.source == "seller" or observation.source == "failure")
+			and observation.syncID
 			and wantedIDs[observation.syncID]
-			and now - observation.timestamp < SECONDS_PER_DAY then
+			and observation.timestamp <= now
+			and now - observation.timestamp < SALE_HISTORY_SECONDS then
 			observations[#observations + 1] = {
 				attempted = observation.attempted,
+				privateSafe = true,
 				resolutionKey = observation.resolutionKey,
 				sold = observation.sold,
 				source = observation.source,
@@ -340,7 +514,7 @@ local function CopySaleDelta(saleData, wantedIDs)
 	return #observations > 0 and { observations = observations } or nil
 end
 
-local function BuildPush(scopeFilter, fullHistory)
+local function BuildPush(scopeFilter, fullHistory, includeCollectors)
 	local scopes = {}
 	for index = 1, #AUCTION_HOUSE_TYPES do
 		local auctionHouseType = AUCTION_HOUSE_TYPES[index]
@@ -374,11 +548,15 @@ local function BuildPush(scopeFilter, fullHistory)
 			end
 		end
 	end
-	return { faction = playerFaction, scopes = scopes }
+	return {
+		collectors = includeCollectors and BuildCollectorData() or nil,
+		scopes = scopes,
+	}
 end
 
 local function MergeSaleObservation(realmSales, itemID, incoming)
 	if type(incoming) ~= "table" or type(incoming.syncID) ~= "string"
+		or incoming.privateSafe ~= true
 		or type(incoming.timestamp) ~= "number"
 		or type(incoming.transactionKey) ~= "string"
 		or incoming.source ~= "seller" and incoming.source ~= "failure"
@@ -390,18 +568,20 @@ local function MergeSaleObservation(realmSales, itemID, incoming)
 		or incoming.source == "failure" and (incoming.attempted <= 0
 			or incoming.sold ~= 0 or incoming.totalSaleValue ~= 0)
 		or incoming.totalSaleValue < 0 or incoming.timestamp > GetServerTime()
-		or GetServerTime() - incoming.timestamp >= SECONDS_PER_DAY then
+		or GetServerTime() - incoming.timestamp >= SALE_HISTORY_SECONDS then
 		return false
 	end
 	local data = realmSales[itemID]
-	if not data then
+	if type(data) ~= "table" or type(data.observations) ~= "table" then
 		data = { observations = {} }
 		realmSales[itemID] = data
 	end
 	local now = GetServerTime()
 	for index = #data.observations, 1, -1 do
 		local observation = data.observations[index]
-		if not observation.timestamp or now - observation.timestamp >= SECONDS_PER_DAY then
+		if type(observation) ~= "table" or type(observation.timestamp) ~= "number"
+			or observation.timestamp > now
+			or now - observation.timestamp >= SALE_HISTORY_SECONDS then
 			tableRemove(data.observations, index)
 		elseif observation.syncID == incoming.syncID then
 			return false
@@ -409,6 +589,7 @@ local function MergeSaleObservation(realmSales, itemID, incoming)
 	end
 	data.observations[#data.observations + 1] = {
 		attempted = incoming.attempted,
+		privateSafe = true,
 		resolutionKey = incoming.resolutionKey,
 		sold = incoming.sold,
 		source = incoming.source,
@@ -451,6 +632,7 @@ end
 
 local function MergeDelta(delta)
 	local receivedScopes = {}
+	local receivedCollectors = MergeCollectorData(delta.collectors)
 	local incomingScopes = type(delta.scopes) == "table" and delta.scopes or {}
 	for auctionHouseType, incoming in pairs(incomingScopes) do
 		local scopeDB, scope
@@ -514,7 +696,7 @@ local function MergeDelta(delta)
 			if received then
 				receivedScopes[auctionHouseType] = true
 				addon:Printf(L["Received auction data for the %s auction house."],
-					auctionHouseType == "Shared" and AUCTION_HOUSE
+					auctionHouseType == "Shared" and L["Shared"]
 						or auctionHouseType == "Neutral" and FACTION_NEUTRAL
 						or auctionHouseType == "Alliance" and FACTION_ALLIANCE or FACTION_HORDE)
 				addon:FireAPIEvent("AUCTION_HOUSE_DATA_UPDATED",
@@ -522,7 +704,7 @@ local function MergeDelta(delta)
 			end
 		end
 	end
-	return receivedScopes
+	return receivedScopes, receivedCollectors
 end
 
 local function SendPush(push, kind)
@@ -530,36 +712,9 @@ local function SendPush(push, kind)
 		return
 	end
 	push = push or BuildPush()
-	if next(push.scopes) then
+	if next(push.scopes) or next(push.collectors or {}) then
 		SendPacket(kind or "PUSH", push)
 	end
-end
-
-local function CompletePull(requestID)
-	local pending = pendingPulls[requestID]
-	if not pending then
-		return
-	end
-	if not pending.returned then
-		pendingPulls[requestID] = nil
-		return
-	end
-	local filters = {}
-	for auctionHouseType in pairs(pending.selections or {}) do
-		filters[auctionHouseType] = true
-	end
-	-- Keep each auction house in its own multipart stream. A character may retain
-	-- substantial data for several markets, while the decoder's safety limit and
-	-- an interrupted transmission should affect only one isolated partition.
-	for auctionHouseType in pairs(filters) do
-		local push = BuildPush({ [auctionHouseType] = true }, true)
-		push.requestID = requestID
-		SendPush(push, "RETURN")
-	end
-	if pending.timer then
-		pending.timer:Cancel()
-	end
-	pendingPulls[requestID] = nil
 end
 
 local function FinishPull(requestID)
@@ -567,35 +722,51 @@ local function FinishPull(requestID)
 	if not pending then
 		return
 	end
-	local selections = {}
-	for index = 1, #AUCTION_HOUSE_TYPES do
-		local auctionHouseType = AUCTION_HOUSE_TYPES[index]
-		local scopeDB = ScopeEnabled(auctionHouseType) and GetScopeDB(auctionHouseType)
-		local realmSales = addon:GetRealmSales(auctionHouseType)
-		local localSummary = scopeDB and BuildScopeSummary(scopeDB, realmSales) or nil
-		local localSignature = SummarySignature(localSummary)
-		local selectedSignatures = {}
-		for sender, advertisement in pairs(pending.advertisements) do
-			local summary = advertisement[auctionHouseType]
-			local signature = SummarySignature(summary)
-			if signature ~= "" and signature ~= localSignature and not selectedSignatures[signature] then
-				selections[auctionHouseType] = selections[auctionHouseType] or {}
-				selections[auctionHouseType][sender] = true
-				selectedSignatures[signature] = summary
+	local localCollectors = BuildCollectorData()
+	local localAdvertisement = {
+		collectorSignature = CollectorSignature(localCollectors),
+		scopes = BuildAdvertisement(),
+	}
+	local localSignature = AdvertisementSignature(localAdvertisement)
+	local selectedSender, selectedAdvertisement
+	local selectedFreshness, selectedCoverage = -1, -1
+	for sender, advertisement in pairs(pending.advertisements) do
+		local signature = AdvertisementSignature(advertisement)
+		if signature ~= localSignature then
+			local freshness = AdvertisementFreshness(advertisement)
+			local coverage = AdvertisementCoverage(advertisement)
+			if not selectedSender or freshness > selectedFreshness
+				or freshness == selectedFreshness and coverage > selectedCoverage
+				or freshness == selectedFreshness and coverage == selectedCoverage
+				and sender < selectedSender then
+				selectedSender = sender
+				selectedAdvertisement = advertisement
+				selectedFreshness = freshness
+				selectedCoverage = coverage
 			end
 		end
 	end
-	if next(selections) then
-		pending.selections = selections
+	if selectedSender then
+		pending.selectedSender = selectedSender
+		pending.expectedScopes = {}
+		local scopes = type(selectedAdvertisement.scopes) == "table"
+			and selectedAdvertisement.scopes or {}
+		for index = 1, #AUCTION_HOUSE_TYPES do
+			local auctionHouseType = AUCTION_HOUSE_TYPES[index]
+			if SummarySignature(scopes[auctionHouseType]) ~= "" then
+				pending.expectedScopes[auctionHouseType] = true
+			end
+		end
+		pending.expectedCollectors = type(selectedAdvertisement.collectorSignature) == "string"
+			and selectedAdvertisement.collectorSignature ~= ""
 		SendPacket("REQUEST", {
 			requestID = requestID,
-			selections = selections,
+			selectedSender = selectedSender,
 		}, "NORMAL")
-		-- BULK auction histories can take substantially longer than an ordinary addon
-		-- message. Keep reconciliation state for an hour so a valid slow transfer can
-		-- still publish its merged union; logging out naturally discards this state.
-		pending.timer = C_Timer.NewTimer(60 * 60, function()
-			CompletePull(requestID)
+		-- Multipart auction histories can take longer than ordinary addon messages.
+		-- This timer only discards request bookkeeping; received parts merge at once.
+		pending.timer = C_Timer.NewTimer(10 * 60, function()
+			pendingPulls[requestID] = nil
 		end)
 	else
 		pendingPulls[requestID] = nil
@@ -606,7 +777,7 @@ local function RequestPush()
 	if CanSyncNow() then
 		addon.db.char.syncSequence = (addon.db.char.syncSequence or 0) + 1
 		local requestID = tableConcat({
-			playerFullName or playerName,
+			addon:GetSyncSourceID(),
 			GetServerTime(),
 			addon.db.char.syncSequence,
 		}, ":")
@@ -616,7 +787,7 @@ local function RequestPush()
 		pendingPulls[requestID].timer = C_Timer.NewTimer(5, function()
 			FinishPull(requestID)
 		end)
-		SendPacket("PULL", { faction = playerFaction, requestID = requestID }, "NORMAL")
+		SendPacket("PULL", { requestID = requestID }, "NORMAL")
 	end
 end
 
@@ -629,41 +800,41 @@ local function ScheduleAdvertisement(sender, requestID)
 		seenPulls[requestID] = nil
 	end)
 	-- Advertisements are small summaries. The requester compares every reply before
-	-- asking one useful peer per auction-house type for its complete retained data.
+	-- asking useful peers for complete retained auction and collector data.
 	C_Timer.After(random(1, 3), function()
 		local scopes = BuildAdvertisement()
-		if next(scopes) then
+		local collectors = BuildCollectorData()
+		local collectorSignature = CollectorSignature(collectors)
+		if next(scopes) or collectorSignature ~= "" then
 			SendPacket("ADVERTISE", {
-			requestID = requestID,
-			scopes = scopes,
-			target = sender,
-		}, "NORMAL")
+				collectorSamples = CollectorSampleCount(collectors),
+				collectorSignature = collectorSignature,
+				requestID = requestID,
+				scopes = scopes,
+				target = sender,
+			}, "NORMAL")
 		end
 	end)
 end
 
 local function SendRequestedPush(sender, data)
-	local filters = {}
-	local selections = type(data.selections) == "table" and data.selections or {}
-	for auctionHouseType, selectedSenders in pairs(selections) do
-		if type(selectedSenders) == "table" and ScopeEnabled(auctionHouseType) then
-			for selectedSender in pairs(selectedSenders) do
-				if IsSelf(selectedSender) then
-					filters[auctionHouseType] = true
-					break
-				end
-			end
-		end
-	end
-	if not next(filters) then
+	if type(data.requestID) ~= "string" or not IsSelf(data.selectedSender) then
 		return
 	end
-	for auctionHouseType in pairs(filters) do
-		local push = BuildPush({ [auctionHouseType] = true }, true)
+	-- The requester elects exactly one responder from compact advertisements.
+	-- Keep each market in its own multipart stream so one interrupted partition
+	-- cannot invalidate the others.
+	for index = 1, #AUCTION_HOUSE_TYPES do
+		local auctionHouseType = AUCTION_HOUSE_TYPES[index]
+		local push = BuildPush({ [auctionHouseType] = true }, true, false)
 		push.requestID = data.requestID
 		push.target = sender
 		SendPush(push)
 	end
+	local push = BuildPush({}, false, true)
+	push.requestID = data.requestID
+	push.target = sender
+	SendPush(push)
 end
 
 local function ReturnMergedPush(sender, data)
@@ -674,25 +845,35 @@ local function ReturnMergedPush(sender, data)
 	if not pending then
 		return
 	end
-	pending.returned = pending.returned or {}
-	for auctionHouseType in pairs(type(data.scopes) == "table" and data.scopes or {}) do
-		pending.returned[auctionHouseType .. ":" .. sender] = true
+	if sender ~= pending.selectedSender then
+		return
 	end
-	for auctionHouseType, selectedSenders in pairs(pending.selections or {}) do
-		for selectedSender in pairs(selectedSenders) do
-			if not pending.returned[auctionHouseType .. ":" .. selectedSender] then
-				return
-			end
+	pending.received = pending.received or {}
+	for auctionHouseType in pairs(type(data.scopes) == "table" and data.scopes or {}) do
+		pending.received[auctionHouseType] = true
+	end
+	if next(type(data.collectors) == "table" and data.collectors or {}) then
+		pending.receivedCollectors = true
+	end
+	for auctionHouseType in pairs(pending.expectedScopes or {}) do
+		if not pending.received[auctionHouseType] then
+			return
 		end
 	end
-	-- One bounded return publishes the complete union after every selected peer has
-	-- replied. RETURN packets are merged but never answered, preventing echo loops.
-	CompletePull(data.requestID)
+	if pending.expectedCollectors and not pending.receivedCollectors then
+		return
+	end
+	if pending.timer then
+		pending.timer:Cancel()
+	end
+	-- PUSH packets use the guild channel, so every eligible peer has already seen
+	-- and merged the elected responder's data. A second return broadcast is wasteful.
+	pendingPulls[data.requestID] = nil
 end
 
 function module:OnCommReceived(_, text, distribution, sender)
 	-- Existing clients can use a short same-realm name. Forever requires its full,
-	-- link-form firstName-surname identity because first names are not unique.
+	-- normalized firstName surname identity because first names are not unique.
 	if distribution ~= SYNC_DISTRIBUTION or IsSelf(sender) then
 		return
 	end
@@ -703,7 +884,7 @@ function module:OnCommReceived(_, text, distribution, sender)
 	if not success or type(packet) ~= "table" then
 		return
 	end
-	-- Realm sales are rolling 24-hour observations. Sweep the character's local
+	-- Realm sales are rolling 60-day observations. Sweep the character's local
 	-- scopes before accepting peer data; touched relayed scopes are pruned below.
 	saleCollector:PruneRealmSales()
 
@@ -713,15 +894,13 @@ function module:OnCommReceived(_, text, distribution, sender)
 		local pending = type(packet.data.requestID) == "string"
 			and IsSelf(packet.data.target) and pendingPulls[packet.data.requestID]
 		if pending and type(packet.data.scopes) == "table" then
-			pending.advertisements[sender] = packet.data.scopes
+			pending.advertisements[sender] = packet.data
 		end
 	elseif packet.kind == "REQUEST" then
 		SendRequestedPush(sender, packet.data)
 	elseif packet.kind == "PUSH" then
 		MergeDelta(packet.data)
 		ReturnMergedPush(sender, packet.data)
-	elseif packet.kind == "RETURN" then
-		MergeDelta(packet.data)
 	end
 end
 
@@ -733,8 +912,14 @@ function module:YAAHA_SCAN_PROCESSED()
 	-- peer data never generates another message, preventing echo loops.
 	for index = 1, #AUCTION_HOUSE_TYPES do
 		local auctionHouseType = AUCTION_HOUSE_TYPES[index]
-		local push = BuildPush({ [auctionHouseType] = true })
+		local push = BuildPush({ [auctionHouseType] = true }, false, false)
 		SendPush(push)
+	end
+end
+
+function module:YAAHA_BREAKDOWN_OBSERVED()
+	if CanSyncNow() then
+		SendPush(BuildPush({}, false, true))
 	end
 end
 
@@ -766,5 +951,6 @@ function module:OnEnable()
 		module:OnCommReceived(...)
 	end)
 	self:RegisterEvent("PLAYER_ENTERING_WORLD")
+	self:RegisterMessage("YAAHA_BREAKDOWN_OBSERVED")
 	self:RegisterMessage("YAAHA_SCAN_PROCESSED")
 end

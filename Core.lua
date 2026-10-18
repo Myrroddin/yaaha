@@ -1,15 +1,14 @@
 local abs = math.abs
-local C_NameUtil = C_NameUtil
 local COPPER_AMOUNT_SYMBOL = COPPER_AMOUNT_SYMBOL
 local COPPER_AMOUNT_TEXTURE = COPPER_AMOUNT_TEXTURE
+local DECIMAL_SEPERATOR = DECIMAL_SEPERATOR or "."
 local floor = math.floor
 local format = string.format
 local FormatLargeNumber = FormatLargeNumber
 local GetNormalizedRealmName = GetNormalizedRealmName
+local GetServerTime = GetServerTime
 local GOLD_AMOUNT_SYMBOL = GOLD_AMOUNT_SYMBOL
 local GOLD_AMOUNT_TEXTURE = GOLD_AMOUNT_TEXTURE
-local LE_EXPANSION_CLASSIC = LE_EXPANSION_CLASSIC
-local LE_EXPANSION_LEVEL_CURRENT = LE_EXPANSION_LEVEL_CURRENT
 local LE_GAME_ERR_AUCTION_BID_OWN = LE_GAME_ERR_AUCTION_BID_OWN
 local LE_GAME_ERR_AUCTION_DATABASE_ERROR = LE_GAME_ERR_AUCTION_DATABASE_ERROR
 local LE_GAME_ERR_AUCTION_HIGHER_BID = LE_GAME_ERR_AUCTION_HIGHER_BID
@@ -19,6 +18,7 @@ local LE_GAME_ERR_NOT_ENOUGH_MONEY = LE_GAME_ERR_NOT_ENOUGH_MONEY
 local LibStub = LibStub
 local NameUtil = NameUtil
 local pairs = pairs
+local random = math.random
 local SILVER_AMOUNT_SYMBOL = SILVER_AMOUNT_SYMBOL
 local SILVER_AMOUNT_TEXTURE = SILVER_AMOUNT_TEXTURE
 local stringMatch = string.match
@@ -27,40 +27,59 @@ local tableConcat = table.concat
 local tonumber = tonumber
 local UnitFactionGroup = UnitFactionGroup
 local UnitFullName = UnitFullName
+local WOW_PROJECT_BURNING_CRUSADE_CLASSIC = WOW_PROJECT_BURNING_CRUSADE_CLASSIC
+local WOW_PROJECT_CAMELOT = WOW_PROJECT_CAMELOT
+local WOW_PROJECT_CLASSIC = WOW_PROJECT_CLASSIC
 local WOW_PROJECT_ID = WOW_PROJECT_ID
 local WOW_PROJECT_MAINLINE = WOW_PROJECT_MAINLINE
 local WOW_PROJECT_MISTS_CLASSIC = WOW_PROJECT_MISTS_CLASSIC
+local WOW_PROJECT_WRATH_CLASSIC = WOW_PROJECT_WRATH_CLASSIC
 
 ---@class YAAHA: AceAddon, AceComm-3.0, AceConsole-3.0, AceSerializer-3.0, LibAboutPanel-2.0
+---@field AuctionHouseMinimumPrice integer
 ---@field db AceDBObject-3.0!
 ---@field brokerObject table?
 ---@field FireAPIEvent fun(self: YAAHA, event: string, ...)
+---@field FormatDecimal fun(self: YAAHA, value: number?): string?
+---@field FormatMoney fun(self: YAAHA, copper: number?, showZero?: boolean, numberColor?: string, auctionPrice?: boolean): string
 ---@field GetCharacterKey fun(self: YAAHA): string?
 ---@field GetAuctionHouseTypeForScope fun(self: YAAHA, scope: string?): string?
+---@field GetCurrentMarketValue fun(self: YAAHA, data: table?): number?
 ---@field GetFirstMarketValue fun(self: YAAHA, data: table?): number?, string?
 ---@field GetItemID fun(self: YAAHA, link: string?): integer?
 ---@field GetOptions fun(self: YAAHA): table
 ---@field GetPlayerIdentity fun(self: YAAHA): string?, string?, string?
 ---@field GetRealmSales fun(self: YAAHA, auctionHouseType?: string): table, string
+---@field GetSyncSourceID fun(self: YAAHA): string
 ---@field IsAlt fun(self: YAAHA, name: string?, fullName?: string): boolean
 ---@field IsAuctionActionError fun(self: YAAHA, errorType: number): boolean
----@field IsDealProfitable fun(self: YAAHA, cost: number?, value: number?): boolean
+---@field IsBreakdownDeal fun(self: YAAHA, cost: number?, value: number?, threshold: number?): boolean
+---@field IsVendorDealProfitable fun(self: YAAHA, cost: number?, value: number?): boolean
+---@field IsClassicEra boolean
 ---@field IsForever boolean
+---@field IsMists boolean
+---@field IsStandard boolean
+---@field IsTBC boolean
+---@field IsWrath boolean
 ---@field UsesSharedAuctionHouse boolean
 ---@field IsPlayerAuction fun(self: YAAHA, owner: string?, ownerFullName?: string): boolean
 ---@field NormalizeCharacterName fun(self: YAAHA, name: string?, secondName?: string): string?
 ---@field RefreshBrokerText fun(self: YAAHA)
+---@field RoundDecimal fun(self: YAAHA, value: number?, numDecimals?: integer): number?
+---@field RoundMoney fun(self: YAAHA, copper: number?, auctionPrice?: boolean): integer?
 local addon = LibStub("AceAddon-3.0"):NewAddon("YAAHA", "AceComm-3.0", "AceConsole-3.0", "AceSerializer-3.0", "LibAboutPanel-2.0")
 
----@flavor-narrows forever
----@return boolean
-local function IsForever()
-	return (WOW_PROJECT_ID == WOW_PROJECT_MAINLINE) and (LE_EXPANSION_LEVEL_CURRENT == LE_EXPANSION_CLASSIC)
-end
+addon.IsClassicEra = WOW_PROJECT_ID == WOW_PROJECT_CLASSIC
+addon.IsTBC = WOW_PROJECT_ID == WOW_PROJECT_BURNING_CRUSADE_CLASSIC
+addon.IsWrath = WOW_PROJECT_ID == WOW_PROJECT_WRATH_CLASSIC
+addon.IsMists = WOW_PROJECT_ID == WOW_PROJECT_MISTS_CLASSIC
+addon.IsForever = WOW_PROJECT_ID == WOW_PROJECT_CAMELOT
+addon.IsStandard = WOW_PROJECT_ID == WOW_PROJECT_MAINLINE
+addon.UsesSharedAuctionHouse = addon.IsStandard or addon.IsMists
+addon.AuctionHouseMinimumPrice = addon.UsesSharedAuctionHouse and 100 or 1
 
-addon.IsForever = IsForever()
-addon.UsesSharedAuctionHouse = not addon.IsForever
-	and (WOW_PROJECT_ID == WOW_PROJECT_MAINLINE or WOW_PROJECT_ID == WOW_PROJECT_MISTS_CLASSIC)
+local isForever = addon.IsForever
+local usesSharedAuctionHouse = addon.UsesSharedAuctionHouse
 
 local AceConfigDialog = LibStub("AceConfigDialog-3.0")
 local LibDataBroker = LibStub("LibDataBroker-1.1")
@@ -76,6 +95,14 @@ local MARKET_VALUE_FIELDS = {
 	"monthlyMarketValue",
 	"bimonthlyMarketValue",
 }
+
+local function NormalizeNumDecimals(value)
+	value = tonumber(value)
+	if not value or value ~= value then
+		return 2
+	end
+	return value < 1 and 1 or value > 3 and 3 or floor(value + 0.5)
+end
 
 local defaults = {
 	char = {
@@ -106,6 +133,11 @@ local defaults = {
 		alts = {
 			["*"] = false,
 		},
+		collectorSyncData = {
+			disenchantData = {},
+			millingData = {},
+			prospectData = {},
+		},
 		disenchantData = {},
 		limitedVendorItems = {},
 		minimap = {
@@ -117,22 +149,22 @@ local defaults = {
 		},
 		millingData = {},
 		prospectData = {},
+		syncSourceID = nil,
 		vendorBuyPrices = {},
 	},
 	profile = {
 		auctionHouseOpeningPage = "browse",
 		coinDisplayStyle = "texture",
+		disenchantingDealThreshold = 0.5,
 		formatLargeNumbers = true,
-		includeBreakEvenDeals = true,
+		includeBreakEvenVendorDeals = true,
+		millingDealThreshold = 0.5,
+		numDecimals = 2,
 		profitConsiderations = {
 			["*"] = true,
 		},
-		synchronization = {
-			currentFaction = true,
-			neutral = true,
-			oppositeFaction = true,
-			shared = true,
-		},
+		prospectingDealThreshold = 0.5,
+		syncData = true,
 		trendDisplay = "percent",
 		tooltip = {
 			["02-minBuyout"] = true,
@@ -196,8 +228,8 @@ function addon:OnInitialize()
 	self.db = LibStub("AceDB-3.0"):New("YAAHADB", defaults, true)
 	self:GetModule("Storage"):RestoreAuctionData()
 
-	-- YAAHA's identity key follows the form Blizzard uses in links and messages:
-	-- name-realm on existing clients and firstName-surname on Forever.
+	-- YAAHA stores Blizzard's display identity: name-realm on existing clients
+	-- and firstName surname on Forever. Link-form inputs are normalized below.
 	local characterKey = self:GetCharacterKey()
 	if characterKey then
 		self.db.global.alts[characterKey] = true
@@ -218,6 +250,59 @@ function addon:OpenConfig()
 	AceConfigDialog:Open("YAAHA")
 end
 
+function addon:RoundDecimal(value, numDecimals)
+	if type(value) ~= "number" or value ~= value then
+		return
+	end
+	if value == 0 then
+		return 0
+	end
+
+	numDecimals = NormalizeNumDecimals(numDecimals or self.db.profile.numDecimals)
+	local factor = 10 ^ numDecimals
+	local magnitude = abs(value)
+	local rounded = floor(magnitude * factor + 0.5000000001) / factor
+	-- Preserve a known nonzero value even when it is smaller than the selected
+	-- display precision. Zero remains distinguishable from a very small value.
+	if rounded == 0 then
+		rounded = 1 / factor
+	end
+	return value < 0 and -rounded or rounded
+end
+
+function addon:FormatDecimal(value)
+	local numDecimals = NormalizeNumDecimals(self.db.profile.numDecimals)
+	local rounded = self:RoundDecimal(value, numDecimals)
+	if rounded == nil then
+		return
+	end
+
+	local text = format("%." .. numDecimals .. "f", rounded)
+	text = text:gsub("0+$", "")
+	text = text:gsub("%.$", "")
+	return DECIMAL_SEPERATOR == "." and text or text:gsub("%.", DECIMAL_SEPERATOR)
+end
+
+function addon:RoundMoney(copper, auctionPrice)
+	if type(copper) ~= "number" or copper ~= copper then
+		return
+	end
+	if copper == 0 then
+		return 0
+	end
+
+	local isNegative = copper < 0
+	local rounded = floor(abs(copper) + 0.5)
+	-- Only an actual auction price is subject to the auction house's
+	-- minimum price. All other money rounds to whole copper, and a known nonzero
+	-- value remains distinguishable from an exact zero.
+	local minimum = auctionPrice and self.AuctionHouseMinimumPrice or 1
+	if rounded < minimum then
+		rounded = minimum
+	end
+	return isNegative and -rounded or rounded
+end
+
 function addon:GetFirstMarketValue(data)
 	if not data then
 		return
@@ -231,6 +316,11 @@ function addon:GetFirstMarketValue(data)
 	end
 end
 
+function addon:GetCurrentMarketValue(data)
+	local value = data and data.currentMarketValue
+	return value and value > 0 and value or nil
+end
+
 function addon:GetItemID(link)
 	local itemID = link and stringMatch(link, "item:(%d+)")
 	return itemID and tonumber(itemID)
@@ -241,8 +331,19 @@ function addon:GetCharacterKey()
 	return fullName
 end
 
+function addon:GetSyncSourceID()
+	local sourceID = self.db.global.syncSourceID
+	if type(sourceID) ~= "string" or sourceID == "" then
+		-- The opaque ID deduplicates relayed shared data without disclosing a character.
+		sourceID = format("%x-%x-%x", GetServerTime(),
+			random(100000000, 999999999), random(100000000, 999999999))
+		self.db.global.syncSourceID = sourceID
+	end
+	return sourceID
+end
+
 function addon:GetAuctionHouseTypeForScope(scope)
-	if self.UsesSharedAuctionHouse then
+	if usesSharedAuctionHouse then
 		return "Shared"
 	elseif scope == "realm" then
 		return "Neutral"
@@ -254,7 +355,7 @@ function addon:GetAuctionHouseTypeForScope(scope)
 end
 
 function addon:GetRealmSales(auctionHouseType)
-	if self.UsesSharedAuctionHouse then
+	if usesSharedAuctionHouse then
 		auctionHouseType = "Shared"
 	elseif auctionHouseType ~= "Alliance" and auctionHouseType ~= "Horde"
 		and auctionHouseType ~= "Neutral" then
@@ -267,11 +368,16 @@ function addon:NormalizeCharacterName(name, secondName)
 	if not name or name == "" then
 		return
 	end
-	if self.IsForever then
-		local fullName = secondName and secondName ~= ""
+	if isForever then
+		-- Forever displays "firstName surname", while player links and some APIs
+		-- can use "firstName-surname". Store and compare the display form so alt,
+		-- profession, and auction ownership keys agree with Blizzard and AceDB.
+		local firstName, surname = name:match("^([^%s%-]+)[%s%-](.+)$")
+		if firstName and surname then
+			return NameUtil.GetFullNameWithoutRealm(firstName, surname)
+		end
+		return secondName and secondName ~= ""
 			and NameUtil.GetFullNameWithoutRealm(name, secondName) or name
-		---@diagnostic disable-next-line: wrong-flavor-api
-		return C_NameUtil.ReplaceSurnameSeparatorWithLinkSeparator(fullName)
 	end
 	return secondName and secondName ~= "" and name .. "-" .. secondName or name
 end
@@ -279,7 +385,7 @@ end
 function addon:GetPlayerIdentity()
 	if not playerFullName then
 		playerName, playerSecondName = UnitFullName("player")
-		if not self.IsForever then
+		if not isForever then
 			playerSecondName = playerSecondName or GetNormalizedRealmName()
 		end
 		playerFullName = self:NormalizeCharacterName(playerName, playerSecondName)
@@ -287,17 +393,33 @@ function addon:GetPlayerIdentity()
 	return playerName, playerSecondName, playerFullName
 end
 
-function addon:IsDealProfitable(cost, value)
+function addon:IsVendorDealProfitable(cost, value)
 	if not cost or cost <= 0 or not value or value <= 0 then
 		return false
 	end
-	return self.db.profile.includeBreakEvenDeals and cost <= value or cost < value
+	-- Deal searches evaluate YAAHA as the buyer. Compare against the raw vendor
+	-- return; auction-house seller fees do not apply.
+	return self.db.profile.includeBreakEvenVendorDeals and cost <= value or cost < value
+end
+
+function addon:IsBreakdownDeal(cost, value, threshold)
+	if not cost or cost <= 0 or not value or value <= 0 then
+		return false
+	end
+	threshold = tonumber(threshold)
+	if not threshold or threshold ~= threshold then
+		return false
+	end
+	-- Disenchanting, prospecting, and milling searches compare their purchase cost
+	-- with the raw expected material value. No auction-house seller fee applies.
+	threshold = threshold < 0.01 and 0.01 or threshold > 1 and 1 or threshold
+	return cost <= value * threshold
 end
 
 function addon:IsPlayerAuction(owner, ownerFullName)
 	local name, _, fullName = self:GetPlayerIdentity()
 	local normalizedOwner = self:NormalizeCharacterName(ownerFullName or owner)
-	return normalizedOwner == fullName or not self.IsForever and owner == name
+	return normalizedOwner == fullName or not isForever and owner == name
 		or self:IsAlt(owner, ownerFullName)
 end
 
@@ -312,7 +434,7 @@ end
 
 -- Existing clients can omit the realm for same-realm characters, so their short
 -- names remain a necessary fallback. Forever first names are not unique; accept
--- only its complete, link-form firstName-surname identity.
+-- only a complete firstName surname identity after normalizing link-form input.
 function addon:IsAlt(name, fullName)
 	local alts = self.db.global.alts
 	local normalizedFullName = self:NormalizeCharacterName(fullName)
@@ -321,7 +443,7 @@ function addon:IsAlt(name, fullName)
 		or normalizedName and alts[normalizedName] then
 		return true
 	end
-	if self.IsForever then
+	if isForever then
 		return false
 	end
 
@@ -346,14 +468,15 @@ function addon:RefreshBrokerText()
 	end
 end
 
-function addon:FormatMoney(copper, showZero, numberColor)
+function addon:FormatMoney(copper, showZero, numberColor, auctionPrice)
 	-- Keep semantic color on the numeric portion only. Denomination letters and
 	-- coin textures retain their familiar gold, silver, and copper colors.
+	copper = self:RoundMoney(copper, auctionPrice)
+	if copper == nil then
+		return ""
+	end
 	local isNegative = copper < 0
-	local magnitude = abs(copper)
-	-- A real positive value must never disappear merely because its per-unit average
-	-- is below one copper. All other values use the agreed half-up rounding rule.
-	copper = magnitude > 0 and magnitude < 1 and 1 or floor(magnitude + 0.5)
+	copper = abs(copper)
 	if isNegative and not numberColor then
 		numberColor = "|cffff2020"
 	end

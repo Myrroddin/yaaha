@@ -4,6 +4,7 @@ local LibStub = LibStub
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("EnchantingScrollData")
+local isMists = addon.IsMists
 
 local ARMOR = 4
 local WEAPON = 2
@@ -259,6 +260,93 @@ local enchants = {
 	[64579] = {46098, 2, 60}, -- Enchant Weapon - Blood Draining
 }
 
+-- Mists Classic folds Cataclysm and Mists into one client. These entries extend
+-- the Wrath baseline only there; every equipment enchant uses one universal
+-- Enchanting Vellum, so target class and enchantment level are unnecessary.
+if isMists then
+	-- Enchants introduced in Cataclysm.
+	enchants[71692] = {50816} -- Enchant Gloves - Angler
+	enchants[74132] = {52687} -- Enchant Gloves - Mastery
+	enchants[74189] = {52743} -- Enchant Boots - Earthen Vitality
+	enchants[74191] = {52744} -- Enchant Chest - Mighty Stats
+	enchants[74192] = {52745} -- Enchant Cloak - Lesser Power
+	enchants[74193] = {52746} -- Enchant Bracer - Speed
+	enchants[74195] = {52747} -- Enchant Weapon - Mending
+	enchants[74197] = {52748} -- Enchant Weapon - Avalanche
+	enchants[74198] = {52749} -- Enchant Gloves - Haste
+	enchants[74199] = {52750} -- Enchant Boots - Haste
+	enchants[74200] = {52751} -- Enchant Chest - Stamina
+	enchants[74201] = {52752} -- Enchant Bracer - Critical Strike
+	enchants[74202] = {52753} -- Enchant Cloak - Intellect
+	enchants[74207] = {52754} -- Enchant Shield - Protection
+	enchants[74211] = {52755} -- Enchant Weapon - Elemental Slayer
+	enchants[74212] = {52756} -- Enchant Gloves - Exceptional Strength
+	enchants[74213] = {52757} -- Enchant Boots - Major Agility
+	enchants[74214] = {52758} -- Enchant Chest - Mighty Armor
+	enchants[74220] = {52759} -- Enchant Gloves - Greater Haste
+	enchants[74223] = {52760} -- Enchant Weapon - Hurricane
+	enchants[74225] = {52761} -- Enchant Weapon - Heartsong
+	enchants[74226] = {52762} -- Enchant Shield - Mastery
+	enchants[74229] = {52763} -- Enchant Bracer - Superior Dodge
+	enchants[74230] = {52764} -- Enchant Cloak - Critical Strike
+	enchants[74231] = {52765} -- Enchant Chest - Exceptional Versatility
+	enchants[74232] = {52766} -- Enchant Bracer - Precision
+	enchants[74234] = {52767} -- Enchant Cloak - Protection
+	enchants[74235] = {52768} -- Enchant Off-Hand - Superior Intellect
+	enchants[74236] = {52769} -- Enchant Boots - Precision
+	enchants[74237] = {52770} -- Enchant Bracer - Exceptional Versatility
+	enchants[74238] = {52771} -- Enchant Boots - Mastery
+	enchants[74239] = {52772} -- Enchant Bracer - Greater Haste
+	enchants[74240] = {52773} -- Enchant Cloak - Greater Intellect
+	enchants[74242] = {52774} -- Enchant Weapon - Power Torrent
+	enchants[74244] = {52775} -- Enchant Weapon - Windwalk
+	enchants[74246] = {52776} -- Enchant Weapon - Landslide
+	enchants[74247] = {52777} -- Enchant Cloak - Greater Critical Strike
+	enchants[74248] = {52778} -- Enchant Bracer - Greater Critical Strike
+	enchants[74250] = {52779} -- Enchant Chest - Peerless Stats
+	enchants[74251] = {52780} -- Enchant Chest - Greater Stamina
+	enchants[74252] = {52781} -- Enchant Boots - Assassin's Step
+	enchants[74253] = {52782} -- Enchant Boots - Lavawalker
+	enchants[74254] = {52783} -- Enchant Gloves - Mighty Strength
+	enchants[74255] = {52784} -- Enchant Gloves - Greater Mastery
+	enchants[74256] = {52785} -- Enchant Bracer - Greater Speed
+	enchants[95471] = {68134} -- Enchant 2H Weapon - Mighty Agility
+	enchants[96261] = {68785} -- Enchant Bracer - Major Strength
+	enchants[96262] = {68786} -- Enchant Bracer - Mighty Intellect
+	enchants[96264] = {68784} -- Enchant Bracer - Agility
+
+	-- Enchants introduced in Mists of Pandaria.
+	enchants[104338] = {74700} -- Enchant Bracer - Mastery
+	enchants[104385] = {74701} -- Enchant Bracer - Major Dodge
+	enchants[104389] = {74703} -- Enchant Bracer - Super Intellect
+	enchants[104390] = {74704} -- Enchant Bracer - Exceptional Strength
+	enchants[104391] = {74705} -- Enchant Bracer - Greater Agility
+	enchants[104392] = {74706} -- Enchant Chest - Super Armor
+	enchants[104393] = {74707} -- Enchant Chest - Mighty Versatility
+	enchants[104395] = {74708} -- Enchant Chest - Glorious Stats
+	enchants[104397] = {74709} -- Enchant Chest - Superior Stamina
+	enchants[104398] = {74710} -- Enchant Cloak - Accuracy
+	enchants[104401] = {74711} -- Enchant Cloak - Greater Protection
+	enchants[104403] = {74712} -- Enchant Cloak - Superior Intellect
+	enchants[104404] = {74713} -- Enchant Cloak - Superior Critical Strike
+	enchants[104407] = {74715} -- Enchant Boots - Greater Haste
+	enchants[104408] = {74716} -- Enchant Boots - Greater Precision
+	enchants[104409] = {74717} -- Enchant Boots - Blurred Speed
+	enchants[104414] = {74718} -- Enchant Boots - Pandaren's Step
+	enchants[104416] = {74719} -- Enchant Gloves - Greater Haste
+	enchants[104417] = {74720} -- Enchant Gloves - Superior Haste
+	enchants[104419] = {74721} -- Enchant Gloves - Super Strength
+	enchants[104420] = {74722} -- Enchant Gloves - Superior Mastery
+	enchants[104425] = {74723} -- Enchant Weapon - Windsong
+	enchants[104427] = {74724} -- Enchant Weapon - Jade Spirit
+	enchants[104430] = {74725} -- Enchant Weapon - Elemental Force
+	enchants[104434] = {74726} -- Enchant Weapon - Dancing Steel
+	enchants[104440] = {74727} -- Enchant Weapon - Colossus
+	enchants[104442] = {74728} -- Enchant Weapon - River's Song
+	enchants[104445] = {74729} -- Enchant Off-Hand - Major Intellect
+	enchants[130758] = {89737} -- Enchant Shield - Greater Parry
+end
+
 local vellums = {
 	[ARMOR] = {
 		[0] = {38682, 37602, 43145}, -- Armor Vellum, II, III
@@ -272,10 +360,15 @@ local vellums = {
 	},
 }
 
+local universalVellum = {38682}
+
 function module:GetEnchant(spellID)
 	local data = enchants[spellID]
 	if not data then
 		return
+	end
+	if isMists then
+		return data[1], universalVellum
 	end
 	return data[1], vellums[data[2]][data[3]], data[3], data[2]
 end

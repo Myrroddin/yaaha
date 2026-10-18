@@ -51,6 +51,11 @@ local statusElapsed = 0
 local wasScannerBusy
 local updateFrame = CreateFrame("Frame")
 
+local function IsDisenchantingDeal(cost, value)
+	return addon:IsBreakdownDeal(cost, value,
+		addon.db.profile.disenchantingDealThreshold)
+end
+
 local function SetStatus(text)
 	if statusText then
 		statusText:SetText(text)
@@ -64,7 +69,7 @@ local function GetCacheCounts()
 	for _, itemData in pairs(disenchantList or {}) do
 		local itemListings = 0
 		for _, auction in pairs(itemData.auctions) do
-			if addon:IsDealProfitable(auction.buyout, itemData.expectedValue) then
+			if IsDisenchantingDeal(auction.buyout, itemData.expectedValue) then
 				itemListings = itemListings + (auction.numAuctions or 1)
 			end
 		end
@@ -211,7 +216,7 @@ end
 local function ShowCandidate(listing)
 	local scope = scanner:GetAuctionScope()
 	local disenchant = scope and disenchantingData:GetValue(listing.itemID, scope)
-	if not disenchant or not addon:IsDealProfitable(listing.buyout, disenchant.expectedValue) then
+	if not disenchant or not IsDisenchantingDeal(listing.buyout, disenchant.expectedValue) then
 		return false
 	end
 
@@ -284,15 +289,18 @@ local function ResultsMatchCurrentRequest()
 	return true
 end
 
-local function BuildQueue(disenchantList)
+local function BuildQueue(disenchantList, scope)
 	local requests = {}
 	local requestsByItem = {}
 	-- Query each candidate item once, then evaluate every live buyout returned for
-	-- it. Expanding cached price shapes caused repeated throttle waits for one item.
+	-- it. Recalculate its expected value so a corrected learned range or newer
+	-- material price invalidates an old candidate cache before any item queries.
 	for itemID, itemData in pairs(disenchantList or {}) do
+		local disenchant = disenchantingData:GetValue(itemID, scope)
+		local expectedValue = disenchant and disenchant.expectedValue
 		for _, auction in pairs(itemData.auctions) do
-			if addon:IsDealProfitable(auction.buyout, itemData.expectedValue) then
-				local profit = itemData.expectedValue - auction.buyout
+			if IsDisenchantingDeal(auction.buyout, expectedValue) then
+				local profit = expectedValue - auction.buyout
 				local request = requestsByItem[itemID]
 				if request then
 					if profit > request.profit then
@@ -328,7 +336,7 @@ local function StartSearch()
 	end
 	local scope = scanner:GetAuctionScope()
 	local disenchantList = scope and addon.db[scope].disenchantList
-	queue = BuildQueue(disenchantList)
+	queue = BuildQueue(disenchantList, scope)
 	if #queue == 0 then
 		local scanStats = scope and addon.db[scope].auctionStats
 		if not scanStats or not scanStats.lastScan then
@@ -402,7 +410,7 @@ function module:BuyCandidate(candidate)
 	local scope = scanner:GetAuctionScope()
 	local disenchant = listing and scope and disenchantingData:GetValue(listing.itemID, scope)
 	if not listing or not MatchesRequest(listing, candidate)
-		or not disenchant or not addon:IsDealProfitable(listing.buyout, disenchant.expectedValue) then
+		or not disenchant or not IsDisenchantingDeal(listing.buyout, disenchant.expectedValue) then
 		SetStatus(L["Auction listing changed; searching again."])
 		ContinueAfterCandidate(true)
 		return

@@ -1,9 +1,10 @@
--- Tracks auction sales, failures, purchases, refunds, and sale-rate observations.
+-- Tracks auction outcomes, direct-trade sales, purchases, refunds, and sale-rate observations.
 
 local AUCTION_OUTBID_MAIL_SUBJECT = AUCTION_OUTBID_MAIL_SUBJECT
 local C_AuctionHouse = C_AuctionHouse
 local C_Item = C_Item
 local Enum = Enum
+local floor = math.floor
 local format = string.format
 local GetAuctionItemInfo = GetAuctionItemInfo
 local GetInboxHeaderInfo = GetInboxHeaderInfo
@@ -18,6 +19,7 @@ local pairs = pairs
 local stringGsub = string.gsub
 local stringMatch = string.match
 local tableRemove = table.remove
+local type = type
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("SaleCollector", "AceEvent-3.0")
@@ -28,23 +30,52 @@ local invoices = {}
 local mailboxOpen = false
 local moneyMail = {}
 local SECONDS_PER_DAY = 24 * 60 * 60
-local SALE_LEDGER_LIFETIME = 60 * SECONDS_PER_DAY
-local playerName, playerRealm, playerFullName
+local SALE_HISTORY_DAYS = 60
+local SALE_HISTORY_SECONDS = SALE_HISTORY_DAYS * SECONDS_PER_DAY
+local AUCTION_MAIL_LIFETIME_DAYS = 30
+local playerRealm
 local OUTBID_MAIL_PATTERN = AUCTION_OUTBID_MAIL_SUBJECT
 	and "^" .. stringGsub(AUCTION_OUTBID_MAIL_SUBJECT, "%%s", "(.+)") .. "$"
 local usesModernAuctionHouse = C_AuctionHouse ~= nil and C_AuctionHouse.GetOwnedAuctions ~= nil
 
-local function TransactionKey(seller, itemID, count, saleValue)
-	return format("%s\031%d\031%d\031%d", seller or "", itemID, count, saleValue)
+local function IsRecentTimestamp(timestamp, now)
+	return type(timestamp) == "number" and timestamp <= now
+		and now - timestamp < SALE_HISTORY_SECONDS
+end
+
+local function IsValidSaleObservation(observation, now, allowTrade)
+	if type(observation) ~= "table" then
+		return false
+	end
+	local validSource = observation.source == "seller" or observation.source == "failure"
+		or allowTrade and observation.source == "trade"
+	if not validSource
+		or type(observation.attempted) ~= "number" or observation.attempted <= 0
+		or type(observation.sold) ~= "number" or observation.sold < 0
+		or observation.sold > observation.attempted
+		or type(observation.totalSaleValue) ~= "number" or observation.totalSaleValue < 0
+		or not IsRecentTimestamp(observation.timestamp, now) then
+		return false
+	end
+	if observation.source == "failure" then
+		return observation.sold == 0 and observation.totalSaleValue == 0
+	end
+	return observation.sold > 0 and observation.totalSaleValue > 0
+end
+
+local function TransactionKey(itemID, count, saleValue)
+	return format("%s\031%d\031%d\031%d", addon:GetSyncSourceID(), itemID, count, saleValue)
 end
 
 local function PruneRealmSales(data, now)
-	local observations = data.observations
+	local observations = type(data) == "table" and data.observations
+	if type(observations) ~= "table" then
+		return false
+	end
 	local writeIndex = 1
 	for index = 1, #observations do
 		local observation = observations[index]
-		if (observation.source == "seller" or observation.source == "failure")
-			and now - observation.timestamp < SECONDS_PER_DAY then
+		if IsValidSaleObservation(observation, now, false) then
 			observations[writeIndex] = observation
 			writeIndex = writeIndex + 1
 		end
@@ -52,34 +83,64 @@ local function PruneRealmSales(data, now)
 	for index = #observations, writeIndex, -1 do
 		observations[index] = nil
 	end
+	return observations[1] ~= nil
 end
 
-local function PruneAllRealmSales()
+local function PrunePersonalSales(data, now)
+	local observations = type(data) == "table" and data.observations
+	if type(observations) ~= "table" then
+		return false
+	end
+	local writeIndex = 1
+	for index = 1, #observations do
+		local observation = observations[index]
+		if IsValidSaleObservation(observation, now, true) then
+			observations[writeIndex] = observation
+			writeIndex = writeIndex + 1
+		end
+	end
+	for index = #observations, writeIndex, -1 do
+		observations[index] = nil
+	end
+	return observations[1] ~= nil
+end
+
+local function PruneAllSales()
 	local now = GetServerTime()
 	for _, realmSales in pairs(addon.db.realm.sales.auctionHouses) do
 		for itemID, data in pairs(realmSales) do
-			PruneRealmSales(data, now)
-			if not data.observations[1] then
+			if not PruneRealmSales(data, now) then
 				realmSales[itemID] = nil
 			end
 		end
 	end
+	for itemID, data in pairs(addon.db.realm.sales.personal) do
+		if not PrunePersonalSales(data, now) then
+			addon.db.realm.sales.personal[itemID] = nil
+		end
+	end
 end
 
-local function RecordRealmObservation(auctionHouseType, itemID, attempted, sold, saleValue, source, transactionKey, resolutionKey)
+local function RecordRealmObservation(auctionHouseType, itemID, attempted, sold, saleValue,
+	source, transactionKey, resolutionKey, timestamp)
 	local realmSales = addon:GetRealmSales(auctionHouseType)
 	local data = realmSales[itemID]
-	if not data then
+	if type(data) ~= "table" or type(data.observations) ~= "table" then
 		data = { observations = {} }
 		realmSales[itemID] = data
 	end
 
 	local now = GetServerTime()
+	timestamp = timestamp or now
+	if not IsRecentTimestamp(timestamp, now) then
+		return
+	end
 	PruneRealmSales(data, now)
 	local observationIndex = #data.observations + 1
 	addon.db.char.syncSequence = addon.db.char.syncSequence + 1
 	data.observations[observationIndex] = {
-		timestamp = now,
+		privateSafe = true,
+		timestamp = timestamp,
 		attempted = attempted,
 		sold = sold,
 		totalSaleValue = saleValue or 0,
@@ -87,13 +148,39 @@ local function RecordRealmObservation(auctionHouseType, itemID, attempted, sold,
 		transactionKey = transactionKey,
 		resolutionKey = resolutionKey,
 		syncID = format("%s\031%s\031%d\031%d", source, transactionKey,
-			now, addon.db.char.syncSequence),
+			timestamp, addon.db.char.syncSequence),
+	}
+end
+
+local function RecordPersonalObservation(itemID, attempted, sold, saleValue, source,
+	resolutionKey, timestamp)
+	local personalSales = addon.db.realm.sales.personal
+	local data = personalSales[itemID]
+	if type(data) ~= "table" or type(data.observations) ~= "table" then
+		data = { observations = {} }
+		personalSales[itemID] = data
+	end
+
+	local now = GetServerTime()
+	timestamp = timestamp or now
+	if not IsRecentTimestamp(timestamp, now) then
+		return
+	end
+	PrunePersonalSales(data, now)
+	data.observations[#data.observations + 1] = {
+		attempted = attempted,
+		resolutionKey = resolutionKey,
+		sold = sold,
+		source = source,
+		timestamp = timestamp,
+		totalSaleValue = saleValue or 0,
 	}
 end
 
 local function NewResolutionKey()
 	addon.db.char.syncSequence = addon.db.char.syncSequence + 1
-	return format("%s\031%d\031%d", playerFullName, GetServerTime(), addon.db.char.syncSequence)
+	return format("%s\031%d\031%d", addon:GetSyncSourceID(),
+		GetServerTime(), addon.db.char.syncSequence)
 end
 
 local function RemoveRealmFailure(auctionHouseType, itemID, resolutionKey)
@@ -105,7 +192,28 @@ local function RemoveRealmFailure(auctionHouseType, itemID, resolutionKey)
 	if not data then
 		return
 	end
-	PruneRealmSales(data, GetServerTime())
+	if not PruneRealmSales(data, GetServerTime()) then
+		realmSales[itemID] = nil
+		return
+	end
+	for index = #data.observations, 1, -1 do
+		local observation = data.observations[index]
+		if observation.source == "failure" and observation.resolutionKey == resolutionKey then
+			tableRemove(data.observations, index)
+			return
+		end
+	end
+end
+
+local function RemovePersonalFailure(itemID, resolutionKey)
+	if not resolutionKey then
+		return
+	end
+	local data = addon.db.realm.sales.personal[itemID]
+	if not data or not PrunePersonalSales(data, GetServerTime()) then
+		addon.db.realm.sales.personal[itemID] = nil
+		return
+	end
 	for index = #data.observations, 1, -1 do
 		local observation = data.observations[index]
 		if observation.source == "failure" and observation.resolutionKey == resolutionKey then
@@ -125,7 +233,7 @@ local function PruneSaleLedger(scope, now)
 		return
 	end
 	for index = #ledger, 1, -1 do
-		if now - ledger[index].timestamp >= SALE_LEDGER_LIFETIME then
+		if now - ledger[index].timestamp >= SALE_HISTORY_SECONDS then
 			tableRemove(ledger, index)
 		end
 	end
@@ -165,25 +273,19 @@ local function RemoveSaleLedgerEntry(scope, listing)
 	end
 end
 
-local function RecordSale(listing, saleValue)
-	local personalSales = addon.db.realm.sales.personal
-	local data = personalSales[listing.itemID]
-	if not data then
-		data = { attempted = 0, sold = 0, totalSaleValue = 0 }
-		personalSales[listing.itemID] = data
-	end
-
-	data.sold = data.sold + listing.count
-	data.totalSaleValue = data.totalSaleValue + saleValue
+local function RecordSale(listing, saleValue, timestamp)
 	-- A vanished owner listing is initially a cancellation or expiry. Seller mail can
 	-- later prove that exact posting sold, in which case its provisional failure must
 	-- be replaced rather than counted alongside the successful outcome.
 	RemoveRealmFailure(listing.auctionHouseType, listing.itemID, listing.resolutionKey)
+	RemovePersonalFailure(listing.itemID, listing.resolutionKey)
+	RecordPersonalObservation(listing.itemID, listing.count, listing.count, saleValue,
+		"seller", listing.resolutionKey, timestamp)
 	-- Realm rates describe outcomes resolved during the rolling window. The original
 	-- posting may be hours or days older, so carry both sides of this outcome here.
 	RecordRealmObservation(listing.auctionHouseType, listing.itemID, listing.count, listing.count, saleValue,
-		"seller", TransactionKey(playerFullName, listing.itemID, listing.count, saleValue),
-		listing.resolutionKey)
+		"seller", TransactionKey(listing.itemID, listing.count, saleValue),
+		listing.resolutionKey, timestamp)
 end
 
 local function RecordFailure(listing)
@@ -192,17 +294,12 @@ local function RecordFailure(listing)
 	end
 	RecordRealmObservation(listing.auctionHouseType, listing.itemID, listing.count, 0, 0,
 		"failure", listing.resolutionKey, listing.resolutionKey)
+	RecordPersonalObservation(listing.itemID, listing.count, 0, 0,
+		"failure", listing.resolutionKey)
 end
 
 local function TrackNewListing(scope, listing)
 	listing.resolutionKey = NewResolutionKey()
-	local personalSales = addon.db.realm.sales.personal
-	local data = personalSales[listing.itemID]
-	if not data then
-		data = { attempted = 0, sold = 0, totalSaleValue = 0 }
-		personalSales[listing.itemID] = data
-	end
-	data.attempted = data.attempted + listing.count
 	AddSaleLedgerEntry(scope, listing)
 	inventoryAverageBuy:MoveOutOfInventory(listing.itemID, listing.count)
 	vendorFlipTracking:PreserveQuantity(listing.itemID, listing.count)
@@ -391,6 +488,13 @@ local function ReadInvoice(index)
 		return
 	end
 	local _, itemID = GetInboxItem(index, 1)
+	local _, _, _, _, _, _, daysLeft = GetInboxHeaderInfo(index)
+	local now = GetServerTime()
+	local timestamp = type(daysLeft) == "number"
+		and now + (daysLeft - AUCTION_MAIL_LIFETIME_DAYS) * SECONDS_PER_DAY or now
+	-- Auction mail lasts 30 days. Its remaining lifetime therefore recovers when
+	-- the sale arrived instead of incorrectly dating it when the player loots it.
+	timestamp = floor((timestamp <= now and timestamp or now) + 0.5)
 	return {
 		invoiceType = invoiceType,
 		itemName = itemName,
@@ -399,6 +503,7 @@ local function ReadInvoice(index)
 		buyout = buyout,
 		consignment = consignment,
 		count = count,
+		timestamp = timestamp,
 	}
 end
 
@@ -511,7 +616,7 @@ local function CollectAuctionInvoice(invoice)
 		for index = #ledger, 1, -1 do
 			local listing = ledger[index]
 			if listing.name == invoice.itemName and listing.count == invoice.count and listing.buyout == invoice.buyout then
-				RecordSale(listing, saleValue)
+				RecordSale(listing, saleValue, invoice.timestamp)
 				inventoryAverageBuy:RecordRemoval(listing.itemID, listing.count)
 				vendorFlipTracking:RecordSale(listing.itemID, listing.count,
 					saleValue - (invoice.consignment or 0))
@@ -572,7 +677,7 @@ end
 
 local function OpenMailbox()
 	mailboxOpen = true
-	PruneAllRealmSales()
+	PruneAllSales()
 	invoices = ReadAuctionInvoices()
 	for _, invoice in pairs(invoices) do
 		RecordBuyerCost(invoice)
@@ -602,7 +707,7 @@ local function RecordPendingPurchase(listType, index, price, action, dealType)
 	local _, _, _, _, _, _, _, _, _, _, vendorSell = C_Item.GetItemInfo(itemID)
 	local vendorReturn = vendorSell and vendorSell * count or 0
 	local vendorFlip = dealType == "vendor" or dealType == nil
-		and addon:IsDealProfitable(price, vendorReturn)
+		and addon:IsVendorDealProfitable(price, vendorReturn)
 	local seller = ownerFullName and addon:NormalizeCharacterName(ownerFullName)
 		or owner and addon:NormalizeCharacterName(owner, playerRealm)
 
@@ -665,16 +770,18 @@ function module:OnInitialize()
 	inventoryAverageBuy = addon:GetModule("InventoryAverageBuy")
 	scanner = addon:GetModule("Scanner")
 	vendorFlipTracking = addon:GetModule("VendorFlipTracking")
-	-- GetServerTime continues across logout. Clear the complete rolling realm window
+	-- GetServerTime continues across logout. Clear the complete rolling sale window
 	-- as soon as AceDB is available rather than waiting for a mailbox or sync event.
-	PruneAllRealmSales()
+	PruneAllSales()
 end
 
 function module:OnEnable()
-	playerName, playerRealm, playerFullName = addon:GetPlayerIdentity()
+	local _, realm = addon:GetPlayerIdentity()
+	playerRealm = realm
 	self:RegisterEvent("MAIL_INBOX_UPDATE", CacheAuctionInvoices)
 	self:RegisterEvent("MAIL_CLOSED", CloseMailbox)
 	self:RegisterEvent("MAIL_SHOW", OpenMailbox)
+	self:RegisterMessage("YAAHA_TRADE_SALE")
 	if usesModernAuctionHouse then
 		self:RegisterEvent("AUCTION_HOUSE_SHOW", QueryOwnedAuctionsModern)
 		self:RegisterEvent("OWNED_AUCTIONS_UPDATED", ReadOwnedAuctionsModern)
@@ -720,7 +827,7 @@ function module:DiscardPendingPurchase(purchase)
 end
 
 function module:PruneRealmSales()
-	PruneAllRealmSales()
+	PruneAllSales()
 end
 
 function module:GetRealmSaleData(itemID, auctionHouseType)
@@ -730,7 +837,10 @@ function module:GetRealmSaleData(itemID, auctionHouseType)
 		return
 	end
 
-	PruneRealmSales(data, GetServerTime())
+	if not PruneRealmSales(data, GetServerTime()) then
+		realmSales[itemID] = nil
+		return
+	end
 	local attempted, sold, totalSaleValue = 0, 0, 0
 	for index = 1, #data.observations do
 		local observation = data.observations[index]
@@ -743,16 +853,36 @@ function module:GetRealmSaleData(itemID, auctionHouseType)
 		return
 	end
 
-	return attempted > 0 and sold / attempted or nil, sold,
+	return attempted > 0 and sold / attempted or nil, sold / SALE_HISTORY_DAYS,
 		sold > 0 and totalSaleValue / sold or nil
 end
 
 function module:GetPersonalSaleData(itemID)
 	local data = addon.db.realm.sales.personal[itemID]
-	if not data or data.attempted <= 0 then
+	if not data or not PrunePersonalSales(data, GetServerTime()) then
+		addon.db.realm.sales.personal[itemID] = nil
 		return
 	end
 
-	return data.sold / data.attempted,
-		data.sold > 0 and data.totalSaleValue / data.sold or nil
+	local attempted, sold, totalSaleValue = 0, 0, 0
+	for index = 1, #data.observations do
+		local observation = data.observations[index]
+		attempted = attempted + observation.attempted
+		sold = sold + observation.sold
+		totalSaleValue = totalSaleValue + observation.totalSaleValue
+	end
+	if attempted <= 0 then
+		addon.db.realm.sales.personal[itemID] = nil
+		return
+	end
+
+	return sold / attempted, sold > 0 and totalSaleValue / sold or nil
+end
+
+function module:YAAHA_TRADE_SALE(_, itemID, quantity, saleValue, timestamp)
+	if type(itemID) ~= "number" or itemID < 1 or type(quantity) ~= "number"
+		or quantity < 1 or type(saleValue) ~= "number" or saleValue < 1 then
+		return
+	end
+	RecordPersonalObservation(itemID, quantity, quantity, saleValue, "trade", nil, timestamp)
 end

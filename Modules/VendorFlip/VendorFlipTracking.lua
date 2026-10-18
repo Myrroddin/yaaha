@@ -7,6 +7,7 @@ local COD_PAYMENT = COD_PAYMENT
 local floor = math.floor
 local format = string.format
 local GetPlayerTradeMoney = GetPlayerTradeMoney
+local GetServerTime = GetServerTime
 local GetSendMailCOD = GetSendMailCOD
 local GetSendMailItem = GetSendMailItem
 local GetSendMailItemLink = GetSendMailItemLink
@@ -17,6 +18,7 @@ local GetTradeTargetItemInfo = GetTradeTargetItemInfo
 local GetTradeTargetItemLink = GetTradeTargetItemLink
 local GetUnitName = GetUnitName
 local hooksecurefunc = hooksecurefunc
+local LE_GAME_ERR_TRADE_COMPLETE = LE_GAME_ERR_TRADE_COMPLETE
 local LibStub = LibStub
 local min = math.min
 local pairs = pairs
@@ -205,6 +207,8 @@ local function ReadTradeItems(infoFunction, linkFunction)
 end
 
 local function CountItemKinds(items)
+	-- Multiple stacks or trade slots of the same item remain one item kind; their
+	-- quantities were combined by ReadTradeItems.
 	local count = 0
 	local onlyItemID
 	local onlyQuantity
@@ -344,48 +348,67 @@ function module:MERCHANT_SHOW()
 end
 
 function module:TRADE_ACCEPT_UPDATE(_, playerAccepted, targetAccepted)
-	if playerAccepted == 1 and targetAccepted == 1 then
+	-- Keep the latest accepted state, but do not treat closing the window as success.
+	-- Blizzard confirms completion separately through UI_INFO_MESSAGE.
+	if (playerAccepted == 1 or targetAccepted == 1)
+		and not (GetTradePlayerItemLink(7) or GetTradeTargetItemLink(7)) then
 		CaptureTrade()
 	else
 		tradeSnapshot = nil
 	end
 end
 
-function module:TRADE_CLOSED()
+local function CompleteTrade()
 	if not tradeSnapshot then
 		return
 	end
-	local outgoingKinds, outgoingItemID, outgoingQuantity = CountItemKinds(tradeSnapshot.outgoing)
-	local targetIsAlt = tradeSnapshot.target and addon:IsAlt(tradeSnapshot.target)
-	for itemID, quantity in pairs(tradeSnapshot.outgoing) do
+	local completedTrade = tradeSnapshot
+	tradeSnapshot = nil
+	local outgoingKinds, outgoingItemID, outgoingQuantity = CountItemKinds(completedTrade.outgoing)
+	local incomingKinds, incomingItemID, incomingQuantity = CountItemKinds(completedTrade.incoming)
+	local targetIsAlt = completedTrade.target and addon:IsAlt(completedTrade.target)
+	for itemID, quantity in pairs(completedTrade.outgoing) do
 		if targetIsAlt then
 			inventoryAverageBuy:MoveOutOfInventory(itemID, quantity)
 		else
 			inventoryAverageBuy:RecordRemoval(itemID, quantity)
 		end
 	end
-	if tradeSnapshot.moneyReceived > 0 then
-		if outgoingKinds == 1 and GetInventory()[outgoingItemID]
+	local isSale = outgoingKinds == 1 and incomingKinds == 0
+		and completedTrade.moneyReceived > 0 and completedTrade.moneyGiven == 0
+		and not targetIsAlt
+	if isSale then
+		module:SendMessage("YAAHA_TRADE_SALE", outgoingItemID, outgoingQuantity,
+			completedTrade.moneyReceived, GetServerTime())
+		if GetInventory()[outgoingItemID]
 			and GetInventory()[outgoingItemID] >= outgoingQuantity then
-			self:PreserveQuantity(outgoingItemID, outgoingQuantity)
-			self:RecordSale(outgoingItemID, outgoingQuantity, tradeSnapshot.moneyReceived)
+			module:PreserveQuantity(outgoingItemID, outgoingQuantity)
+			module:RecordSale(outgoingItemID, outgoingQuantity, completedTrade.moneyReceived)
 		end
-	else
-		for itemID, quantity in pairs(tradeSnapshot.outgoing) do
-			self:PreserveQuantity(itemID, quantity)
+	elseif completedTrade.moneyReceived == 0 then
+		for itemID, quantity in pairs(completedTrade.outgoing) do
+			module:PreserveQuantity(itemID, quantity)
 		end
 	end
 
-	local incomingKinds, incomingItemID, incomingQuantity = CountItemKinds(tradeSnapshot.incoming)
-	if incomingKinds == 1 and outgoingKinds == 0 and tradeSnapshot.moneyGiven > 0
-		and tradeSnapshot.moneyReceived == 0 and not targetIsAlt then
-		inventoryAverageBuy:RecordPurchase(incomingItemID, incomingQuantity, tradeSnapshot.moneyGiven)
+	if incomingKinds == 1 and outgoingKinds == 0 and completedTrade.moneyGiven > 0
+		and completedTrade.moneyReceived == 0 and not targetIsAlt then
+		inventoryAverageBuy:RecordPurchase(incomingItemID, incomingQuantity, completedTrade.moneyGiven)
 		local _, _, _, _, _, _, _, _, _, _, vendorSell = C_Item.GetItemInfo(incomingItemID)
 		local vendorReturn = vendorSell and vendorSell * incomingQuantity or 0
-		if addon:IsDealProfitable(tradeSnapshot.moneyGiven, vendorReturn) then
-			self:RecordPurchase(incomingItemID, incomingQuantity, tradeSnapshot.moneyGiven)
+		if addon:IsVendorDealProfitable(completedTrade.moneyGiven, vendorReturn) then
+			module:RecordPurchase(incomingItemID, incomingQuantity, completedTrade.moneyGiven)
 		end
 	end
+end
+
+function module:UI_INFO_MESSAGE(_, _, message)
+	if message == LE_GAME_ERR_TRADE_COMPLETE then
+		CompleteTrade()
+	end
+end
+
+function module:TRADE_CLOSED()
 	tradeSnapshot = nil
 end
 
@@ -399,5 +422,6 @@ function module:OnEnable()
 	self:RegisterEvent("MERCHANT_SHOW")
 	self:RegisterEvent("TRADE_ACCEPT_UPDATE")
 	self:RegisterEvent("TRADE_CLOSED")
+	self:RegisterEvent("UI_INFO_MESSAGE")
 	hooksecurefunc("SendMail", CaptureOutgoingMail)
 end
