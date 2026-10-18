@@ -79,22 +79,22 @@ Data\DisenchantingCollector.lua
 Data\DisenchantingData.lua
 Data\EnchantingCraftData.lua
 Data\EnchantingScrollData.lua [AllowLoadGameType wrath]
-Modules\AuctionHouse\AuctionHouseUI-classic.lua [AllowLoadGameType vanilla, tbc, wrath]
-Modules\AuctionHouse\AuctionHouseUI-modern.lua [AllowLoadGameType standard, mists, camelot]
+Modules\AuctionHouse\AuctionHouseUI-Classic.lua [AllowLoadGameType vanilla, tbc, wrath]
+Modules\AuctionHouse\AuctionHouseUI-Modern.lua [AllowLoadGameType standard, mists, camelot]
 Modules\AuctionHouse\SaleCollector.lua
-Modules\AuctionHouse\Scanner-classic.lua [AllowLoadGameType vanilla, tbc, wrath]
-Modules\AuctionHouse\Scanner-modern.lua [AllowLoadGameType standard, mists, camelot]
+Modules\AuctionHouse\Scanner-Classic.lua [AllowLoadGameType vanilla, tbc, wrath]
+Modules\AuctionHouse\Scanner-Modern.lua [AllowLoadGameType standard, mists, camelot]
 Modules\Data\DataProcessing.lua
 Modules\Data\Storage.lua
 Modules\Data\Sync.lua
-Modules\Disenchanting\DisenchantingDeals-classic.lua [AllowLoadGameType vanilla, tbc, wrath]
-Modules\Disenchanting\DisenchantingDeals-modern.lua [AllowLoadGameType standard, mists, camelot]
+Modules\Disenchanting\DisenchantingDeals-Classic.lua [AllowLoadGameType vanilla, tbc, wrath]
+Modules\Disenchanting\DisenchantingDeals-Modern.lua [AllowLoadGameType standard, mists, camelot]
 Modules\Inventory\InventoryAverageBuy.lua
-Modules\Professions\ProfessionScanner-classic.lua [AllowLoadGameType vanilla, tbc, wrath]
-Modules\Professions\ProfessionScanner-modern.lua [AllowLoadGameType standard, mists, camelot]
+Modules\Professions\ProfessionScanner-Classic.lua [AllowLoadGameType vanilla, tbc, wrath]
+Modules\Professions\ProfessionScanner-Modern.lua [AllowLoadGameType standard, mists, camelot]
 Modules\Tooltip\Tooltip.lua
 Modules\Vendor\MerchantData.lua
-Modules\VendorFlip\VendorDeals-classic.lua [AllowLoadGameType vanilla, tbc, wrath]
-Modules\VendorFlip\VendorDeals-modern.lua [AllowLoadGameType standard, mists, camelot]
+Modules\VendorFlip\VendorDeals-Classic.lua [AllowLoadGameType vanilla, tbc, wrath]
+Modules\VendorFlip\VendorDeals-Modern.lua [AllowLoadGameType standard, mists, camelot]
 Modules\VendorFlip\VendorFlipTracking.lua
 API\API.lua
