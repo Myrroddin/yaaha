@@ -1,3 +1,5 @@
+-- Builds YAAHA's AceConfig options with client-appropriate controls and sizing.
+
 local ALT_KEY = ALT_KEY
 local AUCTION_HOUSE_BROWSE_HEADER_QUANTITY = AUCTION_HOUSE_BROWSE_HEADER_QUANTITY
 local AUCTION_HOUSE_FRAME_TITLE_SELL = AUCTION_HOUSE_FRAME_TITLE_SELL
@@ -30,13 +32,14 @@ local function RefreshMinimapButton()
 	LibDBIcon:Refresh("YAAHA", addon.db.global.minimap)
 end
 
-local function CreateTooltipToggle(order, name)
+local function CreateTooltipToggle(order, name, desc)
 	return {
 		order = order,
 		type = "toggle",
 		width = "relative",
 		relWidth = 1 / 3,
 		name = name,
+		desc = desc,
 	}
 end
 
@@ -318,10 +321,18 @@ function addon:GetOptions()
 							["12-vendorSell"] = CreateTooltipToggle(120, SELL_PRICE),
 							["13-vendorBuy"] = CreateTooltipToggle(130, L["Buy from vendor"]),
 							["14-inventoryAverageBuy"] = CreateTooltipToggle(140, L["Inventory average buy"]),
-							["15-personalSaleRate"] = CreateTooltipToggle(150, L["Personal sale rate"]),
-							["16-realmSaleRate"] = CreateTooltipToggle(160, L["Realm sale rate"]),
-							["17-realmSoldPerDay"] = CreateTooltipToggle(170, L["Realm sold per day"]),
-							["18-realmAverageSaleValue"] = CreateTooltipToggle(180, L["Realm average sale value"]),
+							["15-personalRollingSaleRate"] = CreateTooltipToggle(150,
+								L["Personal 60-day sale rate"],
+								L["Fraction of your resolved sale quantity sold across all characters and auction houses on this realm during the rolling 60-day window."]),
+							["16-realmRollingSaleRate"] = CreateTooltipToggle(160,
+								L["Realm 60-day sale rate"],
+								L["Fraction of observed listing and purchase quantity confirmed sold in this market during the rolling 60-day window."]),
+							["17-realmRollingSalesPerDay"] = CreateTooltipToggle(170,
+								L["Realm rolling sales per day"],
+								L["Average number of individual items confirmed sold through completed listings or purchases during YAAHA's observed market window, up to 60 days."]),
+							["18-realmRollingAverageSaleValue"] = CreateTooltipToggle(180,
+								L["Realm 60-day average sale value"],
+								L["Average gross per-unit auction sale value in this market during the rolling 60-day window."]),
 							["19-craftingValue"] = CreateTooltipToggle(190, L["Crafting cost"]),
 							["20-craftingResults"] = CreateTooltipToggle(200, L["Crafting breakdown"]),
 							["21-conversionValue"] = CreateTooltipToggle(210, L["Conversion cost"]),

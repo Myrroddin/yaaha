@@ -46,10 +46,6 @@ local function GetInventory()
 	return addon.db.realm.vendorFlip.inventory
 end
 
-local function CharacterName(name)
-	return name and name:match("^[^-]+") or nil
-end
-
 local function GetTrackedCount(itemID)
 	return C_Item.GetItemCount(itemID, true)
 end
@@ -303,14 +299,16 @@ function module:MAIL_SEND_SUCCESS()
 	if outgoingMail.cod > 0 then
 		-- A single-item COD has an unambiguous price allocation. Mixed COD mail is
 		-- deliberately ignored because no truthful per-item allocation is possible.
-		if kindCount == 1 and GetInventory()[itemID] and GetInventory()[itemID] >= quantity then
+		local recipient = addon:NormalizeCharacterName(outgoingMail.recipient)
+		if kindCount == 1 and recipient
+			and GetInventory()[itemID] and GetInventory()[itemID] >= quantity then
 			self:PreserveQuantity(itemID, quantity)
 			local cod = addon.db.realm.vendorFlip.cod
 			cod[#cod + 1] = {
 				itemID = itemID,
 				quantity = quantity,
 				proceeds = outgoingMail.cod,
-				recipient = CharacterName(outgoingMail.recipient),
+				recipient = recipient,
 				subject = format(COD_PAYMENT, outgoingMail.subject),
 			}
 		end
@@ -326,10 +324,14 @@ function module:RecordMailProceeds(sender, subject, proceeds)
 	if not sender or not subject or not proceeds or proceeds < 1 then
 		return
 	end
+	local normalizedSender = addon:NormalizeCharacterName(sender)
+	if not normalizedSender then
+		return
+	end
 	local cod = addon.db.realm.vendorFlip.cod
 	for index = #cod, 1, -1 do
 		local pending = cod[index]
-		if pending.recipient == CharacterName(sender) and pending.subject == subject
+		if pending.recipient == normalizedSender and pending.subject == subject
 			and pending.proceeds == proceeds then
 			self:RecordSale(pending.itemID, pending.quantity, proceeds)
 			tableRemove(cod, index)
@@ -374,6 +376,8 @@ local function CompleteTrade()
 			inventoryAverageBuy:RecordRemoval(itemID, quantity)
 		end
 	end
+	-- Coins can be assigned truthfully only when one item kind moves in one direction.
+	-- Multiple stacks of that item are valid because ReadTradeItems combines them.
 	local isSale = outgoingKinds == 1 and incomingKinds == 0
 		and completedTrade.moneyReceived > 0 and completedTrade.moneyGiven == 0
 		and not targetIsAlt

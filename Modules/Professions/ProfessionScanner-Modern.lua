@@ -61,6 +61,8 @@ local function ReadReagentSlots(schematic)
 		local isBasic = reagentType == Enum.CraftingReagentType.Basic
 		local isRequiredModifying = reagentType == Enum.CraftingReagentType.Modifying
 			and slot.required
+		-- Optional reagents represent a player's chosen variation, not the recipe's
+		-- baseline cost. Required modifying slots remain mandatory and are retained.
 		if isBasic or isRequiredModifying then
 			local quantities = {}
 			for _, variable in ipairs(slot.variableQuantities or {}) do
@@ -190,6 +192,8 @@ local function ScanProfession()
 		local nextRecipeInfo = nextRecipeID and (recipeInfos[nextRecipeID]
 			or C_TradeSkillUI.GetRecipeInfo(nextRecipeID))
 		local hasLearnedHigherRank = nextRecipeInfo and nextRecipeInfo.learned
+		-- Rank chains describe alternate versions of one recipe. Once a higher rank is
+		-- learned, retaining its predecessor would create a duplicate, inferior path.
 		if recipeInfo and recipeInfo.learned and not recipeInfo.isDummyRecipe
 			and not recipeInfo.isRecraft and not recipeInfo.isGatheringRecipe
 			and not recipeInfo.isSalvageRecipe and not hasLearnedHigherRank then

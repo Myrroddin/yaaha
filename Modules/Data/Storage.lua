@@ -106,6 +106,8 @@ local function LoadOppositeFactionData()
 	oppositeFactionLoaded = true
 	oppositeFactionData = nil
 
+	-- AceDB exposes only the active faction-realm directly. Read the raw scopes to
+	-- find the freshest opposite-faction database from this Connected Realm group.
 	local connectedRealms = {}
 	local currentRealm = GetNormalizedRealmName()
 	if currentRealm then

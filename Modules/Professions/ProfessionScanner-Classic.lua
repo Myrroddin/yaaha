@@ -270,6 +270,8 @@ local function ScanTradeSkill()
 	scanningTradeSkill = true
 	local skillLineID = GetProfessionIdentity(name)
 	local isAlchemy = skillLineID == ALCHEMY_SKILL_LINE
+	-- Hidden recipe rows are absent from the legacy API. Expand every header for a
+	-- complete snapshot, then restore precisely the headers the player had collapsed.
 	local collapsedHeaders = {}
 	for index = 1, GetNumTradeSkills() do
 		local headerName, headerType, _, isExpanded = GetTradeSkillInfo(index)
@@ -324,6 +326,8 @@ local function ScanCraft()
 		return true
 	end
 	scanningCraft = true
+	-- The Craft API has the same visibility rule as TradeSkill: collapsed headers
+	-- must be opened temporarily or their recipes would disappear from saved data.
 	local collapsedHeaders = {}
 	for index = 1, GetNumCrafts() do
 		local headerName, _, headerType, _, isExpanded = GetCraftInfo(index)

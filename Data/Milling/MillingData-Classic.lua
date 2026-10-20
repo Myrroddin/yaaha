@@ -3,7 +3,7 @@
 local LibStub = LibStub
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
----@type VariableConversionDataModule
+---@class MillingData: VariableConversionDataModule
 local module = addon:NewModule("MillingData")
 local definitions = {}
 

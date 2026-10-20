@@ -231,6 +231,8 @@ function module:RecordPurchaseOutsideInventory(itemID, quantity, totalCost)
 		return
 	end
 	AppendLot(itemID, quantity, totalCost)
+	-- Auction purchases are learned from mail before the item necessarily appears in
+	-- bags. Mark them in transit so reconciliation does not append a second free lot.
 	local transfers = addon.db.factionrealm.inventoryTransfers
 	transfers[itemID] = (transfers[itemID] or 0) + quantity
 end
@@ -240,6 +242,8 @@ function module:MoveOutOfInventory(itemID, quantity)
 		return
 	end
 	local transfers = addon.db.factionrealm.inventoryTransfers
+	-- Mailing to an alt or posting an auction temporarily removes owned units. Keep
+	-- their FIFO lots intact until a later sale or a return to visible inventory.
 	transfers[itemID] = (transfers[itemID] or 0) + quantity
 	local snapshot = addon.db.char.inventorySnapshot
 	if snapshot[itemID] then
@@ -252,6 +256,8 @@ function module:RecordRemoval(itemID, quantity)
 		return
 	end
 	local transfers = addon.db.factionrealm.inventoryTransfers
+	-- Resolve in-transit units first; only the remaining quantity left visible
+	-- inventory and should advance the character's bag snapshot.
 	local outside = min(quantity, transfers[itemID] or 0)
 	if outside > 0 then
 		transfers[itemID] = transfers[itemID] > outside and transfers[itemID] - outside or nil

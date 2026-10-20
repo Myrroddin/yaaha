@@ -30,7 +30,6 @@ local UnitFactionGroup = UnitFactionGroup
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("Sync", "AceEvent-3.0")
-local isForever = addon.IsForever
 local usesSharedAuctionHouse = addon.UsesSharedAuctionHouse
 local dataProcessing = addon:GetModule("DataProcessing")
 local collectorModules = {
@@ -50,7 +49,7 @@ local SECONDS_PER_DAY = 24 * 60 * 60
 local MAX_HISTORY_SECONDS = 60 * SECONDS_PER_DAY
 local SALE_HISTORY_SECONDS = 60 * SECONDS_PER_DAY
 local playerFaction = UnitFactionGroup("player")
-local playerName, playerFullName
+local playerFullName
 local BASE64_VARIANT = Enum.Base64Variant.StandardUrlSafe
 local oppositeFaction = playerFaction == "Alliance" and "Horde" or "Alliance"
 -- Sync transports YAAHA's normalized data rather than Blizzard auction results.
@@ -74,7 +73,6 @@ local connectedRealmKey
 local function IsSelf(sender)
 	local normalizedSender = addon:NormalizeCharacterName(sender)
 	return normalizedSender == playerFullName
-		or not isForever and sender == playerName
 end
 
 local function ScopeEnabled(auctionHouseType)
@@ -313,7 +311,8 @@ local function GetSaleIDs(saleData)
 	for index = 1, #(saleData.observations or {}) do
 		local observation = saleData.observations[index]
 		if type(observation) == "table" and observation.privateSafe == true
-			and (observation.source == "seller" or observation.source == "failure")
+			and (observation.source == "seller" or observation.source == "buyer"
+				or observation.source == "failure")
 			and type(observation.syncID) == "string"
 			and type(observation.timestamp) == "number" and observation.timestamp <= now
 			and now - observation.timestamp < SALE_HISTORY_SECONDS then
@@ -328,7 +327,7 @@ local function StatsSignature(stats)
 		and stats.lastScan .. ":" .. (stats.totalListings or 0) .. ":" .. (stats.totalItems or 0) or nil
 end
 
-local function BuildScopeSummary(scopeDB, realmSales)
+local function BuildScopeSummary(scopeDB, realmSales, auctionHouseType)
 	local now = GetServerTime()
 	local summary = {
 		historyCount = 0,
@@ -338,6 +337,7 @@ local function BuildScopeSummary(scopeDB, realmSales)
 		lastScan = scopeDB.auctionStats.lastScan or 0,
 		saleCount = 0,
 		saleNewest = 0,
+		saleTrackingStarted = saleCollector:GetRealmSalesTrackingStarted(auctionHouseType),
 		saleTotal = 0,
 		snapshotCount = 0,
 		snapshotTotal = 0,
@@ -385,8 +385,8 @@ local function SummarySignature(summary)
 		return ""
 	end
 	local fields = { "lastScan", "historyCount", "historyNewest", "historyTimestampTotal",
-		"historyValueTotal", "saleCount", "saleNewest", "saleTotal", "snapshotCount",
-		"snapshotTotal" }
+		"historyValueTotal", "saleCount", "saleNewest", "saleTrackingStarted", "saleTotal",
+		"snapshotCount", "snapshotTotal" }
 	local values = {}
 	for index = 1, #fields do
 		local value = summary[fields[index]]
@@ -450,7 +450,7 @@ local function BuildAdvertisement()
 			local realmSales = addon:GetRealmSales(auctionHouseType)
 			if next(scopeDB.auctionDB) or next(realmSales)
 				or StatsSignature(scopeDB.auctionStats) then
-				scopes[auctionHouseType] = BuildScopeSummary(scopeDB, realmSales)
+				scopes[auctionHouseType] = BuildScopeSummary(scopeDB, realmSales, auctionHouseType)
 			end
 		end
 	end
@@ -493,13 +493,16 @@ local function CopySaleDelta(saleData, wantedIDs)
 	for index = 1, #(saleData.observations or {}) do
 		local observation = saleData.observations[index]
 		if type(observation) == "table" and observation.privateSafe == true
-			and (observation.source == "seller" or observation.source == "failure")
+			and (observation.source == "seller" or observation.source == "buyer"
+				or observation.source == "failure")
 			and observation.syncID
 			and wantedIDs[observation.syncID]
 			and observation.timestamp <= now
 			and now - observation.timestamp < SALE_HISTORY_SECONDS then
 			observations[#observations + 1] = {
 				attempted = observation.attempted,
+				auctionID = observation.auctionID,
+				matchKey = observation.matchKey,
 				privateSafe = true,
 				resolutionKey = observation.resolutionKey,
 				sold = observation.sold,
@@ -542,6 +545,7 @@ local function BuildPush(scopeFilter, fullHistory, includeCollectors)
 			if next(market) or next(sales) or stats then
 				scopes[auctionHouseType] = {
 					market = market,
+					saleTrackingStarted = saleCollector:GetRealmSalesTrackingStarted(auctionHouseType),
 					sales = sales,
 					stats = stats,
 				}
@@ -559,14 +563,21 @@ local function MergeSaleObservation(realmSales, itemID, incoming)
 		or incoming.privateSafe ~= true
 		or type(incoming.timestamp) ~= "number"
 		or type(incoming.transactionKey) ~= "string"
-		or incoming.source ~= "seller" and incoming.source ~= "failure"
+		or incoming.source ~= "seller" and incoming.source ~= "buyer"
+			and incoming.source ~= "failure"
 		or type(incoming.attempted) ~= "number" or type(incoming.sold) ~= "number"
+		or incoming.auctionID ~= nil and (type(incoming.auctionID) ~= "number"
+			or incoming.auctionID <= 0 or incoming.auctionID % 1 ~= 0)
+		or incoming.matchKey ~= nil and (type(incoming.matchKey) ~= "string"
+			or incoming.matchKey == "")
 		or incoming.resolutionKey ~= nil and type(incoming.resolutionKey) ~= "string"
 		or incoming.source == "failure" and type(incoming.resolutionKey) ~= "string"
 		or type(incoming.totalSaleValue) ~= "number" or incoming.attempted < 0
 		or incoming.sold < 0 or incoming.sold > incoming.attempted
 		or incoming.source == "failure" and (incoming.attempted <= 0
 			or incoming.sold ~= 0 or incoming.totalSaleValue ~= 0)
+		or incoming.source ~= "failure" and (incoming.attempted <= 0
+			or incoming.sold <= 0 or incoming.totalSaleValue <= 0)
 		or incoming.totalSaleValue < 0 or incoming.timestamp > GetServerTime()
 		or GetServerTime() - incoming.timestamp >= SALE_HISTORY_SECONDS then
 		return false
@@ -589,6 +600,8 @@ local function MergeSaleObservation(realmSales, itemID, incoming)
 	end
 	data.observations[#data.observations + 1] = {
 		attempted = incoming.attempted,
+		auctionID = incoming.auctionID,
+		matchKey = incoming.matchKey,
 		privateSafe = true,
 		resolutionKey = incoming.resolutionKey,
 		sold = incoming.sold,
@@ -641,7 +654,8 @@ local function MergeDelta(delta)
 		end
 		if scopeDB and type(incoming) == "table" then
 			local realmSales = addon:GetRealmSales(auctionHouseType)
-			local received = false
+			local received = saleCollector:MergeRealmSalesTrackingStarted(
+				auctionHouseType, incoming.saleTrackingStarted)
 			local incomingStats = incoming.stats
 			if type(incomingStats) == "table" and type(incomingStats.lastScan) == "number"
 				and type(incomingStats.totalListings) == "number" and type(incomingStats.totalItems) == "number"
@@ -688,6 +702,8 @@ local function MergeDelta(delta)
 						and saleData.observations or {}
 					for index = 1, #observations do
 						if MergeSaleObservation(realmSales, itemID, observations[index]) then
+							saleCollector:MergeRealmSalesTrackingStarted(
+								auctionHouseType, observations[index].timestamp)
 							received = true
 						end
 					end
@@ -872,8 +888,9 @@ local function ReturnMergedPush(sender, data)
 end
 
 function module:OnCommReceived(_, text, distribution, sender)
-	-- Existing clients can use a short same-realm name. Forever requires its full,
-	-- normalized firstName surname identity because first names are not unique.
+	-- Core expands ordinary short names to the current realm and requires Forever's
+	-- complete Given Surname identity, preventing both cross-realm and first-name
+	-- collisions during self-message detection.
 	if distribution ~= SYNC_DISTRIBUTION or IsSelf(sender) then
 		return
 	end
@@ -946,7 +963,8 @@ function module:OnEnable()
 	if #AUCTION_HOUSE_TYPES == 0 then
 		return
 	end
-	playerName, _, playerFullName = addon:GetPlayerIdentity()
+	local _, _, fullName = addon:GetPlayerIdentity()
+	playerFullName = fullName
 	addon:RegisterComm(COMM_PREFIX, function(...)
 		module:OnCommReceived(...)
 	end)

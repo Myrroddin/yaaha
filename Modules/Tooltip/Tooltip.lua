@@ -1,4 +1,4 @@
--- Adds YAAHA auction, sales, inventory, destruction, and crafting data to item tooltips.
+-- Adds YAAHA auction, sales, inventory, material-breakdown, conversion, and crafting data to item tooltips.
 
 local AUCTIONS = AUCTIONS
 local _G = _G
@@ -30,20 +30,14 @@ local ShoppingTooltip3 = ShoppingTooltip3
 local tostring = tostring
 local UnitFactionGroup = UnitFactionGroup
 
----@class TooltipBreakdownDataModule: AceModule
----@field GetValue fun(self: TooltipBreakdownDataModule, itemInfo: number|string, scope?: string, priceDB?: table): table?
-
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local usesSharedAuctionHouse = addon.UsesSharedAuctionHouse
 local module = addon:NewModule("Tooltip")
 local convertData = addon:GetModule("ConvertData")
----@type TooltipBreakdownDataModule
 local disenchantingData = addon:GetModule("DisenchantingData")
 local inventoryAverageBuy = addon:GetModule("InventoryAverageBuy")
----@type TooltipBreakdownDataModule?
 local millingData = addon:GetModule("MillingData", true)
 local professionScanner = addon:GetModule("ProfessionScanner")
----@type TooltipBreakdownDataModule?
 local prospectingData = addon:GetModule("ProspectingData", true)
 local saleCollector = addon:GetModule("SaleCollector")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
@@ -76,10 +70,10 @@ local vendorPriceFields = {
 }
 
 local saleFields = {
-	{ "personalSaleRate", "Personal sale rate", "rate", "15-personalSaleRate" },
-	{ "realmSaleRate", "Realm sale rate", "rate", "16-realmSaleRate" },
-	{ "realmSoldPerDay", "Realm sold per day", "decimal", "17-realmSoldPerDay" },
-	{ "realmAverageSaleValue", "Realm average sale value", "money", "18-realmAverageSaleValue" },
+	{ "personalRollingSaleRate", "Personal 60-day sale rate", "rate", "15-personalRollingSaleRate" },
+	{ "realmRollingSaleRate", "Realm 60-day sale rate", "rate", "16-realmRollingSaleRate" },
+	{ "realmRollingSalesPerDay", "Realm rolling sales per day", "decimal", "17-realmRollingSalesPerDay" },
+	{ "realmRollingAverageSaleValue", "Realm 60-day average sale value", "money", "18-realmRollingAverageSaleValue" },
 }
 
 local tooltips = {}
@@ -245,7 +239,9 @@ local function AddCraftingLines(AddLine, result, showBreakdown, multiplier)
 		local name, link = C_Item.GetItemInfo(material.itemID)
 		local label = format(L["%s x%s"], link or name or tostring(material.itemID),
 			FormatExpectedQuantity(material.quantity * quantityScale))
-		AddLine(L["Crafting"], label, addon:FormatMoney(material.totalValue * quantityScale))
+		local value = material.totalValue
+			and addon:FormatMoney(material.totalValue * quantityScale) or "--"
+		AddLine(L["Crafting"], label, value)
 		-- Keep the recipe's actual reagent above; this is only the cheaper way
 		-- to obtain it and never changes the saved recipe requirements.
 		if material.source == "convert" and material.detail then
@@ -282,7 +278,7 @@ local function GetBreakdown(itemID, priceScope, priceDB)
 end
 
 local function FormatCraftingValue(result, multiplier, auctionData, auctionCut)
-	if not result then
+	if not result or not result.value then
 		return "--"
 	end
 	local craftingValue = result.value * multiplier
@@ -316,13 +312,14 @@ function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 	local factionCrafting = professionScanner:GetItemCrafting(
 		itemID, scopeDB.auctionDB, false, allowAlchemySpecialization)
 	local knownCraft = professionScanner:IsItemKnown(itemID, false)
-	local personalSaleRate = saleCollector:GetPersonalSaleData(itemID)
-	local realmSaleRate, realmSoldPerDay, realmAverageSaleValue =
-		saleCollector:GetRealmSaleData(itemID, auctionHouseType)
+	local personalRollingSaleRate = saleCollector:GetPersonalRollingSaleMetrics(itemID)
+	local realmRollingSaleRate, realmRollingSalesPerDay, realmRollingAverageSaleValue =
+		saleCollector:GetRealmRollingSaleMetrics(itemID, auctionHouseType)
 	local _, _, _, _, _, _, _, _, _, _, vendorSell = C_Item.GetItemInfo(itemID)
 	local vendorBuy = addon.db.global.vendorBuyPrices[itemID]
-	if not data and not breakdown and not conversion and not inventoryBuy and not knownCraft and personalSaleRate == nil
-		and realmSaleRate == nil and realmSoldPerDay == nil and not vendorSell and not vendorBuy then
+	if not data and not breakdown and not conversion and not inventoryBuy and not knownCraft
+		and personalRollingSaleRate == nil and realmRollingSaleRate == nil
+		and realmRollingSalesPerDay == nil and not vendorSell and not vendorBuy then
 		return
 	end
 	data = data or {}
@@ -380,10 +377,10 @@ function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 	for index = 1, #saleFields do
 		local field = saleFields[index]
 		local key, kind = field[1], field[3]
-		local value = key == "personalSaleRate" and personalSaleRate
-			or key == "realmSaleRate" and realmSaleRate
-			or key == "realmSoldPerDay" and realmSoldPerDay
-			or key == "realmAverageSaleValue" and realmAverageSaleValue or data[key]
+		local value = key == "personalRollingSaleRate" and personalRollingSaleRate
+			or key == "realmRollingSaleRate" and realmRollingSaleRate
+			or key == "realmRollingSalesPerDay" and realmRollingSalesPerDay
+			or key == "realmRollingAverageSaleValue" and realmRollingAverageSaleValue or data[key]
 		if settings[field[4]] and value ~= nil then
 			if kind == "rate" and value >= 0 and value <= 1 then
 				AddLine(L["Sales"], L[field[2]], FormatRate(value))

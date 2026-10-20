@@ -42,6 +42,8 @@ function module:UNIT_SPELLCAST_SENT(_, unit, target, castGUID, spellID)
 		return
 	end
 	awaitingLoot = nil
+	-- Prefer the event target for macros and non-bag selection. The container hook
+	-- remains the fallback on clients which omit the target.
 	local capturedTarget = target and target ~= "" and CaptureCandidate(target)
 	if not capturedTarget and (not candidate or GetTime() - candidate.time > 1) then
 		candidate = nil

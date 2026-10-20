@@ -312,6 +312,7 @@ function module:ActOnCandidate(action, candidate)
 	SetStatus(L["Waiting for the auction house..."])
 	pendingPurchase = saleCollector:RecordPendingPurchase("list", listing.index, price, action, "vendor")
 	PlaceAuctionBid("list", listing.index, price)
+	saleCollector:ReleasePendingPurchaseHook(pendingPurchase)
 end
 
 function module:SkipCandidate(candidate)
@@ -321,6 +322,10 @@ function module:SkipCandidate(candidate)
 end
 
 local function ShowCandidate(listing)
+	if not running or not currentRequest or not highBidderNotices then
+		return false
+	end
+
 	-- Do not offer another action when the player or a known alt is already the
 	-- high bidder. The account will receive the item unless somebody outbids it.
 	if IsOwnHighBidder(listing) then

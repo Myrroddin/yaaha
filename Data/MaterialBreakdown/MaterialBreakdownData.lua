@@ -150,6 +150,8 @@ function methods:GetResults(itemInfo)
 		AddLearnedResults(aggregate, learned, byItemID)
 	end
 	local syncedBySource = addon.db.global.collectorSyncData[self.variableConversionSavedKey]
+	-- Each opaque source retains its cumulative snapshot independently. Relayed
+	-- copies can then replace that source without multiplying the same observations.
 	for sourceID, sourceData in pairs(syncedBySource) do
 		local synced = type(sourceData) == "table" and sourceData[itemID]
 		if synced and not AddLearnedResults(aggregate, synced, byItemID) then

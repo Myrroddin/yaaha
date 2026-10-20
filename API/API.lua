@@ -1,3 +1,5 @@
+-- Exposes YAAHA's stable, read-only market, sale, breakdown, and crafting API.
+
 local floor = math.floor
 local LibStub = LibStub
 local next = next
@@ -54,13 +56,13 @@ local API_VERSION = 1
 ---@field results YAAHA_API.DisenchantMaterial[] Possible material results.
 
 ---@class YAAHA_API.PricedDisenchantMaterial: YAAHA_API.DisenchantMaterial
----@field marketValue? integer Selected per-unit material value in copper.
----@field priceSource? YAAHA_API.MarketValueSource Market-value source used for this material.
----@field expectedValue? integer Probability-adjusted material value in copper.
----@field missingPrice boolean Whether no positive material market value was available.
+---@field marketValue integer Selected per-unit material value in copper.
+---@field priceSource YAAHA_API.MarketValueSource Market-value source used for this material.
+---@field expectedValue integer Probability-adjusted material value in copper.
+---@field missingPrice boolean Always false; an incomplete priced result is never exposed.
 
 ---@class YAAHA_API.PricedDisenchantResults
----@field expectedValue? integer Complete expected disenchant value in copper.
+---@field expectedValue integer Complete expected disenchant value in copper.
 ---@field requiredSkill integer Required Enchanting skill.
 ---@field sampleCount integer Number of learned local and synchronized disenchantments contributing to this result range.
 ---@field results YAAHA_API.PricedDisenchantMaterial[] Priced material results.
@@ -78,7 +80,7 @@ local API_VERSION = 1
 ---@field unitValue integer Selected per-unit value in copper.
 ---@field totalValue integer Selected value of the required quantity in copper.
 ---@field source YAAHA_API.MaterialValueSource Source which supplied the reagent's lowest value.
----@field conversion? YAAHA_API.CraftingConversion Conversion details when `source` is `"convert"`.
+---@field conversion? YAAHA_API.CraftingConversion Single-source conversion details when `source` is `"convert"`; absent for averaged conversion families.
 ---@field crafting? YAAHA_API.CraftingResult Nested recipe details when `source` is `"crafting"`.
 
 ---@class YAAHA_API.CraftingResult
@@ -86,7 +88,7 @@ local API_VERSION = 1
 ---@field totalReagentValue integer Reagent value for one recipe cast in copper.
 ---@field outputQuantity number Average number of items produced per cast.
 ---@field expectedOutputMultiplier number Expected finished-item auction-return multiplier from an applicable Alchemy specialization; `1`, `1.2`, or `1.4`. This does not reduce crafting or material costs.
----@field character string Canonical character identity whose known recipe was used (`name-realm` or Forever's `firstName-surname`).
+---@field character string Canonical character identity whose known recipe was used (`name-realm` or Forever's `firstName surname`).
 ---@field profession string Localized profession name.
 ---@field stale boolean Whether the character's profession snapshot predates the current game-client build.
 ---@field spellID integer Recipe spell ID.
@@ -116,9 +118,9 @@ local API_VERSION = 1
 ---@field GetBimonthlyMarketValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
 ---@field GetLastScanTime fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
 ---@field GetAuctionHouseStats fun(auctionHouseType?: YAAHA_API.AuctionHouseType): YAAHA_API.AuctionHouseStats?
----@field GetRealmSaleRate fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): number?
----@field GetRealmSoldPerDay fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): number?
----@field GetRealmAverageSaleValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
+---@field GetRealmRollingSaleRate fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): number?
+---@field GetRealmRollingSalesPerDay fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): number?
+---@field GetRealmRollingAverageSaleValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
 ---@field IsDisenchantable fun(itemID: integer): boolean
 ---@field GetDisenchantResults fun(itemID: integer): YAAHA_API.DisenchantResults?
 ---@field GetDisenchantValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType, fullResults?: boolean): integer|YAAHA_API.PricedDisenchantResults|nil
@@ -159,6 +161,9 @@ local copperFields = {
 }
 
 local function ResolveAuctionHouseType(auctionHouseType)
+	-- Cross-client consumers may pass a faction label unconditionally. Shared-house
+	-- clients accept those known labels but normalize all of them to their one market;
+	-- unknown strings fail closed on every client.
 	if usesSharedAuctionHouse then
 		if auctionHouseType == nil or auctionHouseType == "Alliance"
 			or auctionHouseType == "Horde" or auctionHouseType == "Neutral"
@@ -243,13 +248,13 @@ local function GetItemValue(itemID, auctionHouseType, field)
 	return data and data[field]
 end
 
-local function GetRealmSaleData(itemID, auctionHouseType)
+local function GetRealmRollingSaleMetrics(itemID, auctionHouseType)
 	if type(itemID) ~= "number" or itemID <= 0 or itemID ~= floor(itemID) then
 		return
 	end
 	auctionHouseType = ResolveAuctionHouseType(auctionHouseType)
 	if auctionHouseType then
-		return saleCollector:GetRealmSaleData(itemID, auctionHouseType)
+		return saleCollector:GetRealmRollingSaleMetrics(itemID, auctionHouseType)
 	end
 end
 
@@ -393,25 +398,25 @@ end
 
 ---@param itemID integer
 ---@param auctionHouseType? YAAHA_API.AuctionHouseType
----@return number? realmSaleRate
-function API.GetRealmSaleRate(itemID, auctionHouseType)
-	local rate = GetRealmSaleData(itemID, auctionHouseType)
+---@return number? realmRollingSaleRate
+function API.GetRealmRollingSaleRate(itemID, auctionHouseType)
+	local rate = GetRealmRollingSaleMetrics(itemID, auctionHouseType)
 	return NormalizeRate(rate)
 end
 
 ---@param itemID integer
 ---@param auctionHouseType? YAAHA_API.AuctionHouseType
----@return number? realmSoldPerDay
-function API.GetRealmSoldPerDay(itemID, auctionHouseType)
-	local _, sold = GetRealmSaleData(itemID, auctionHouseType)
+---@return number? realmRollingSalesPerDay
+function API.GetRealmRollingSalesPerDay(itemID, auctionHouseType)
+	local _, sold = GetRealmRollingSaleMetrics(itemID, auctionHouseType)
 	return type(sold) == "number" and sold >= 0 and sold or nil
 end
 
 ---@param itemID integer
 ---@param auctionHouseType? YAAHA_API.AuctionHouseType
----@return integer? realmAverageSaleValue
-function API.GetRealmAverageSaleValue(itemID, auctionHouseType)
-	local _, _, value = GetRealmSaleData(itemID, auctionHouseType)
+---@return integer? realmRollingAverageSaleValue
+function API.GetRealmRollingAverageSaleValue(itemID, auctionHouseType)
+	local _, _, value = GetRealmRollingSaleMetrics(itemID, auctionHouseType)
 	return NormalizeCopper(value)
 end
 
@@ -471,7 +476,7 @@ function API.GetDisenchantValue(itemID, auctionHouseType, fullResults)
 	end
 	local scope = auctionDB == addon.db.realm.auctionDB and "realm" or "factionrealm"
 	local data = disenchantingData:GetValue(itemID, scope, auctionDB)
-	if not data then
+	if not data or not data.expectedValue then
 		return nil
 	end
 	local expectedValue = NormalizeCopper(data.expectedValue)
@@ -511,8 +516,10 @@ end
 local CopyCraftingResult
 ---@return YAAHA_API.CraftingResult? result
 function CopyCraftingResult(source)
-	if not source then
-		return
+	-- Partial internal results let the tooltip show known reagent prices beside
+	-- unresolved ones, but an incomplete total does not satisfy the public API.
+	if not source or not source.value then
+		return nil
 	end
 	---@type YAAHA_API.CraftingResult
 	local result = {
@@ -537,7 +544,7 @@ function CopyCraftingResult(source)
 			totalValue = NormalizeRequiredCopper(material.totalValue),
 			source = material.source,
 		}
-		if material.source == "convert" and material.detail then
+		if material.source == "convert" and material.detail and material.detail.itemID then
 			copy.conversion = {
 				itemID = material.detail.itemID,
 				quantity = material.detail.quantity,
@@ -566,14 +573,17 @@ end
 ---@return integer|YAAHA_API.CraftingResult|nil value
 function API.GetCraftingValue(itemID, auctionHouseType, fullResults, currentCharacterOnly)
 	if not ValidateCraftingArguments(itemID, fullResults, currentCharacterOnly) then
-		return
+		return nil
 	end
 	local auctionDB = GetAuctionDB(auctionHouseType)
 	local allowAlchemySpecialization = usesSharedAuctionHouse
 		or GetAuctionScope(auctionHouseType) == "factionrealm"
 	local result = auctionDB and professionScanner:GetItemCrafting(
 		itemID, auctionDB, currentCharacterOnly, allowAlchemySpecialization)
-	return fullResults and CopyCraftingResult(result) or result and NormalizeRequiredCopper(result.value)
+	if fullResults then
+		return CopyCraftingResult(result)
+	end
+	return result and result.value and NormalizeRequiredCopper(result.value) or nil
 end
 
 ---@param spellID integer
@@ -585,12 +595,15 @@ end
 ---@return integer|YAAHA_API.CraftingResult|nil value
 function API.GetRecipeCraftingValue(spellID, auctionHouseType, fullResults, currentCharacterOnly)
 	if not ValidateCraftingArguments(spellID, fullResults, currentCharacterOnly) then
-		return
+		return nil
 	end
 	local auctionDB = GetAuctionDB(auctionHouseType)
 	local allowAlchemySpecialization = usesSharedAuctionHouse
 		or GetAuctionScope(auctionHouseType) == "factionrealm"
 	local result = auctionDB and professionScanner:GetRecipeCrafting(
 		spellID, auctionDB, currentCharacterOnly, allowAlchemySpecialization)
-	return fullResults and CopyCraftingResult(result) or result and NormalizeRequiredCopper(result.value)
+	if fullResults then
+		return CopyCraftingResult(result)
+	end
+	return result and result.value and NormalizeRequiredCopper(result.value) or nil
 end

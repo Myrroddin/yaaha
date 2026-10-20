@@ -386,7 +386,7 @@ local function BuildVendorItem(itemID, scanData)
 
 	local result = { vendorSell = vendorSell, auctions = {} }
 	-- Cache break-even listings as well as profitable ones. The profile option is
-	-- applied by the future vendor-flip scan, so changing it never requires a new
+	-- applied by the live vendor-deal search, so changing it never requires a new
 	-- throttled full scan merely to recover equal-price auctions.
 	for count, byCount in pairs(scanData.auctions) do
 		for unitBid, byBid in pairs(byCount) do
@@ -469,11 +469,20 @@ local function FinishProcessing(success, result, vendorList, disenchantList, sco
 end
 
 processingFrame:SetScript("OnUpdate", function()
-	local success, result, vendorList, disenchantList, scope, scanStats, callback = coroutineResume(worker)
+	local activeWorker = worker
+	local activeCompleted = completed
+	if not activeWorker or not activeCompleted then
+		processingFrame:Hide()
+		worker = nil
+		completed = nil
+		return
+	end
+
+	local success, result, vendorList, disenchantList, scope, scanStats, callback = coroutineResume(activeWorker)
 	if not success then
 		geterrorhandler()(format(L["YAAHA auction data processing failed: %s"], tostring(result)))
-		FinishProcessing(false, nil, nil, nil, completed.scope, nil, completed.callback)
-	elseif coroutineStatus(worker) == "dead" then
+		FinishProcessing(false, nil, nil, nil, activeCompleted.scope, nil, activeCompleted.callback)
+	elseif coroutineStatus(activeWorker) == "dead" then
 		FinishProcessing(true, result, vendorList, disenchantList, scope, scanStats, callback)
 	end
 end)

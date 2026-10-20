@@ -85,6 +85,7 @@ Data\Enchanting\EnchantingCraftData-Classic.lua [AllowLoadGameType classic, came
 Data\Enchanting\EnchantingCraftData-Modern.lua [AllowLoadGameType standard, mists]
 Data\Enchanting\EnchantingScrollData.lua [AllowLoadGameType wrath, mists]
 Data\MaterialBreakdown\MaterialBreakdownData.lua [AllowLoadGameType tbc, wrath, mists, standard]
+Data\MaterialValuation\MaterialValuation-Standard.lua [AllowLoadGameType standard]
 Data\Milling\MillingData-Classic.lua [AllowLoadGameType wrath]
 Data\Milling\MillingData-Modern.lua [AllowLoadGameType standard, mists]
 Data\Prospecting\ProspectingData-Classic.lua [AllowLoadGameType tbc, wrath]

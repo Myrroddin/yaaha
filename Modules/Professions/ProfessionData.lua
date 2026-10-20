@@ -36,6 +36,7 @@ local module = addon:NewModule("ProfessionScanner", "AceEvent-3.0")
 local supportsAlchemyMastery = not addon.IsClassicEra and not addon.IsForever
 local usesUniversalVellum = addon.IsStandard or addon.IsMists
 local convertData = addon:GetModule("ConvertData")
+local materialValuationData = addon:GetModule("MaterialValuationData", true)
 -- Wrath and Mists load spell-to-scroll mappings; modern recipe APIs provide
 -- their own output items.
 local enchantingScrollData = addon:GetModule("EnchantingScrollData", true)
@@ -360,21 +361,31 @@ local function Calculate(auctionDB, currentCharacterOnly, outputItemID, allowAlc
 	end
 
 	local function AddMaterial(materials, material, itemID, quantity)
-		local subtotal = material.value * quantity
-		materials[#materials + 1] = {
+		local entry = {
 			itemID = itemID,
 			quantity = quantity,
-			unitValue = material.value,
-			totalValue = subtotal,
-			source = material.source,
-			detail = material.detail,
 		}
+		local subtotal
+		if material then
+			subtotal = material.value * quantity
+			entry.unitValue = material.value
+			entry.totalValue = subtotal
+			entry.source = material.source
+			entry.detail = material.detail
+		end
+		materials[#materials + 1] = entry
 		return subtotal
 	end
 
 	local function IsBetterResult(result, best)
-		return not best or result.value < best.value
-			or result.value == best.value
+		if not best then
+			return true
+		elseif not result.value then
+			return false
+		elseif not best.value then
+			return true
+		end
+		return result.value < best.value or result.value == best.value
 			and result.expectedOutputMultiplier > best.expectedOutputMultiplier
 	end
 
@@ -389,13 +400,14 @@ local function Calculate(auctionDB, currentCharacterOnly, outputItemID, allowAlc
 		visitingRecipes[entry] = true
 		local total = 0
 		local materials = {}
+		local complete = true
 
 		if entry.recipe.reagentSlots then
 			for _, slot in ipairs(entry.recipe.reagentSlots) do
 				local cheapest, cheapestItemID, cheapestQuantity, cheapestTotal
 				for _, candidate in ipairs(slot.items or {}) do
 					local material = GetItemCost(candidate.itemID)
-					local quantity = candidate.quantity or slot.quantity
+					local quantity = candidate.quantity or slot.quantity or 1
 					local candidateTotal = material and quantity and material.value * quantity
 					if candidateTotal and (not cheapestTotal or candidateTotal < cheapestTotal) then
 						cheapest = material
@@ -404,22 +416,26 @@ local function Calculate(auctionDB, currentCharacterOnly, outputItemID, allowAlc
 						cheapestTotal = candidateTotal
 					end
 				end
-				if not cheapest then
-					visitingRecipes[entry] = nil
-					recipeCache[entry] = false
-					return
+				if cheapest then
+					total = total + AddMaterial(materials, cheapest, cheapestItemID, cheapestQuantity)
+				else
+					local candidate = slot.items and slot.items[1]
+					if candidate then
+						AddMaterial(materials, nil, candidate.itemID,
+							candidate.quantity or slot.quantity or 1)
+					end
+					complete = false
 				end
-				total = total + AddMaterial(materials, cheapest, cheapestItemID, cheapestQuantity)
 			end
 		else
 			for itemID, quantity in pairs(entry.recipe.reagents or {}) do
 				local material = GetItemCost(itemID)
-				if not material then
-					visitingRecipes[entry] = nil
-					recipeCache[entry] = false
-					return
+				local subtotal = AddMaterial(materials, material, itemID, quantity)
+				if subtotal then
+					total = total + subtotal
+				else
+					complete = false
 				end
-				total = total + AddMaterial(materials, material, itemID, quantity)
 			end
 		end
 
@@ -448,12 +464,12 @@ local function Calculate(auctionDB, currentCharacterOnly, outputItemID, allowAlc
 					cheapestItemID = itemID
 				end
 			end
-			if not cheapest then
-				visitingRecipes[entry] = nil
-				recipeCache[entry] = false
-				return
+			if cheapest then
+				total = total + AddMaterial(materials, cheapest, cheapestItemID, 1)
+			else
+				AddMaterial(materials, nil, vellumItemIDs[1], 1)
+				complete = false
 			end
-			total = total + AddMaterial(materials, cheapest, cheapestItemID, 1)
 		end
 
 		sort(materials, function(left, right)
@@ -466,8 +482,8 @@ local function Calculate(auctionDB, currentCharacterOnly, outputItemID, allowAlc
 		local result = {
 			-- Expected extra output affects finished-item return, never reagent
 			-- requirements or baseline crafting cost.
-			value = addon:RoundMoney(total / outputQuantity),
-			totalReagentValue = total,
+			value = complete and addon:RoundMoney(total / outputQuantity) or nil,
+			totalReagentValue = complete and total or nil,
 			outputQuantity = outputQuantity,
 			character = entry.character,
 			profession = entry.profession,
@@ -503,13 +519,27 @@ local function Calculate(auctionDB, currentCharacterOnly, outputItemID, allowAlc
 			-- value, keeping conversion and crafting as independent minimum candidates.
 			local conversions = convertData:GetConversions(itemID)
 			if conversions then
+				local conversionTotal = 0
+				local conversionCount = 0
+				local conversionDetail
 				for sourceItemID, quantity in pairs(conversions) do
 					local sourceValue, sourceField = GetMaterialMarketValue(sourceItemID)
-					best = Consider(best, sourceValue and sourceValue * quantity, "convert", {
-						itemID = sourceItemID,
-						quantity = quantity,
-						priceSource = sourceField,
-					})
+					if sourceValue then
+						local pathValue = addon:RoundMoney(sourceValue * quantity)
+						conversionTotal = conversionTotal + pathValue
+						conversionCount = conversionCount + 1
+						conversionDetail = {
+							itemID = sourceItemID,
+							quantity = quantity,
+							priceSource = sourceField,
+						}
+					end
+				end
+				if conversionCount > 0 then
+					-- Average interchangeable conversion paths first, then compare that
+					-- stable candidate with the broader material-acquisition methods.
+					best = Consider(best, conversionTotal / conversionCount, "convert",
+						conversionCount == 1 and conversionDetail or nil)
 				end
 			end
 
@@ -521,6 +551,11 @@ local function Calculate(auctionDB, currentCharacterOnly, outputItemID, allowAlc
 					local recipe = GetRecipeCost(entry)
 					best = Consider(best, recipe and recipe.value, "crafting", recipe)
 				end
+			end
+
+			if materialValuationData then
+				local valuation = materialValuationData:GetValue(itemID, GetItemCost)
+				best = Consider(best, valuation and valuation.value, "convert")
 			end
 		end
 		-- A vendor-sell estimate is deliberately limited to soulbound reagents and
@@ -607,9 +642,9 @@ function module:GetItemCrafting(itemID, auctionDB, currentCharacterOnly, allowAl
 	local calculator = Calculate(auctionDB, currentCharacterOnly, itemID, allowAlchemySpecialization)
 	local best
 	for _, result in ipairs(calculator:GetRecipesForItem(itemID)) do
-		if not best or result.value < best.value
+		if not best or result.value and (not best.value or result.value < best.value
 			or result.value == best.value
-			and result.expectedOutputMultiplier > best.expectedOutputMultiplier then
+			and result.expectedOutputMultiplier > best.expectedOutputMultiplier) then
 			best = result
 		end
 	end

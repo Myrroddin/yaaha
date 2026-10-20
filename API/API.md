@@ -1,344 +1,332 @@
 # YAAHA Public API
 
-YAAHA exposes a small public API for other World of Warcraft addons through the global `YAAHA_API` table. It is not registered with LibStub and must not be retrieved through LibStub.
+YAAHA exposes a deliberately small public API to other World of Warcraft addons through the global `YAAHA_API` table. It is a normal global, not a LibStub library.
 
 > [!IMPORTANT]
 > YAAHA and its public API are under active development. Names, signatures, callbacks, returned structures, and behavior may change before the first stable release. The API version remains `1` during this pre-release design period.
 
-## Table of contents
+## Contents
 
-- [Access](#access)
-- [Editor support](#editor-support)
-- [Versioning](#versioning)
-- [Functions](#functions)
-  - [`GetVersion()`](#getversion)
-  - [`GetItemData(itemID, auctionHouseType)`](#getitemdataitemid-auctionhousetype)
-  - [Item-data wrappers](#item-data-wrappers)
-  - [`GetAuctionHouseStats(auctionHouseType)`](#getauctionhousestatsauctionhousetype)
-  - [Realm-data functions](#realm-data-functions)
-  - [Disenchanting functions](#disenchanting-functions)
-  - [Crafting functions](#crafting-functions)
-- [Callbacks](#callbacks)
-  - [`AUCTION_HOUSE_DATA_UPDATED`](#auction_house_data_updated)
-- [Conventions](#conventions)
-  - [Function calls](#function-calls)
+- [Quick start](#quick-start)
+- [Common conventions](#common-conventions)
+  - [Calling functions](#calling-functions)
   - [Auction-house types](#auction-house-types)
   - [Unavailable data](#unavailable-data)
-  - [Sale rates](#sale-rates)
-  - [Copper values](#copper-values)
+  - [Numbers and money](#numbers-and-money)
+- [Versioning](#versioning)
+- [Item market data](#item-market-data)
+  - [`GetItemData`](#getitemdata)
+  - [Item-data wrappers](#item-data-wrappers)
+  - [`GetAuctionHouseStats`](#getauctionhousestats)
+- [Realm sale metrics](#realm-sale-metrics)
+- [Disenchanting](#disenchanting)
+  - [`IsDisenchantable` and `GetDisenchantResults`](#isdisenchantable-and-getdisenchantresults)
+  - [`GetDisenchantValue`](#getdisenchantvalue)
+- [Crafting](#crafting)
+  - [Crafting functions](#crafting-functions)
+  - [Crafting results](#crafting-results)
+  - [Material results](#material-results)
+- [Callbacks](#callbacks)
+- [Editor support](#editor-support)
 
-## Access
+## Quick start
 
-Addons should access the API directly through its global name:
-
-```lua
-local YAAHA_API = YAAHA_API
-```
-
-Do not use LibStub:
-
-```lua
--- Incorrect: YAAHA_API is not a LibStub library.
-local YAAHA_API = LibStub("YAAHA_API")
-```
-
-An addon which requires the API should declare YAAHA as a required or optional dependency in its TOC so that YAAHA loads first.
-
-## Editor support
-
-`API.lua` publishes [WoWLua-LS](https://tradeskillmaster.github.io/wowlua-ls/guide/why-wowlua-ls) annotations for the global API, accepted auction-house strings, callbacks, and returned tables. When YAAHA's source is visible to the language server, consumers receive completion, hover documentation, literal-value suggestions, argument checking, and nil-aware return types.
-
-The global and its annotation namespace are both named `YAAHA_API`. Consumers normally need no additional annotation:
+Declare YAAHA as a required or optional dependency in the consuming addon's TOC when it must load first. Test the global before using an optional dependency:
 
 ```lua
 if YAAHA_API then
-    local data = YAAHA_API.GetItemData(2589, "Alliance")
-    if data then
-        print(data.firstNonZeroMarketValue, data.firstNonZeroMarketSource)
+    local value, source = YAAHA_API.GetFirstNonZeroMarketValue(2589)
+    if value then
+        print(value, source)
     end
 end
 ```
 
-Supporting annotations use readable names beneath that namespace, such as `YAAHA_API.AuctionHouseType`, `YAAHA_API.ItemData`, and `YAAHA_API.DisenchantResults`. These are editor metadata, not runtime fields which consumers must access. WoWLua-LS applies them automatically to function arguments, return values, and callbacks.
-
-## Versioning
-
-The current public API version is `1`.
-
-The API version is independent of YAAHA's addon release version. A new addon tag or release does not automatically increment the API version. It changes only when the public specification or behavior requires consumers to distinguish the new contract.
-
-Consumers may read the `version` field or call `GetVersion()`:
+Do not retrieve the API through LibStub:
 
 ```lua
-if YAAHA_API and YAAHA_API.version >= 1 then
-    -- API version 1 is available.
-end
+-- Incorrect: YAAHA_API is not a LibStub library.
+local API = LibStub("YAAHA_API")
 ```
 
-## Functions
+## Common conventions
 
-### `GetVersion()`
+### Calling functions
 
-Returns the current public API version.
+Public functions use dot-call syntax because they are functions on a global namespace, not object methods:
 
 ```lua
 local version = YAAHA_API.GetVersion()
 ```
 
-Returns
+### Auction-house types
 
-| Value | Type | Description |
-| --- | --- | --- |
-| `version` | `number` | The public API version. Currently `1`. |
+Functions which accept `auctionHouseType` recognize these strings:
 
-### `GetItemData(itemID, auctionHouseType)`
+| Value | Meaning |
+| --- | --- |
+| `"Alliance"` | Alliance market on a faction-separated client. |
+| `"Horde"` | Horde market on a faction-separated client. |
+| `"Neutral"` | Neutral market on a faction-separated client. |
+| `"Shared"` | The single shared market on Mists and Retail. |
 
-Returns YAAHA's public calculated data for one item in the requested auction house.
+On Classic Era, Burning Crusade, Wrath/Titan, and Forever, omitting the argument or passing `nil` uses the current character's faction market. Explicit values never combine faction and neutral data.
+
+Mists and Retail use one shared market. On those clients, `nil`, `"Alliance"`, `"Horde"`, `"Neutral"`, and `"Shared"` all resolve to the same shared database. This normalization lets a consumer use one call path across clients. Any other string is invalid.
+
+Some modern commodities are traded region-wide, but YAAHA has no external aggregation service. The API reports data observed through the local auction house and does not claim to provide region-wide statistics.
+
+### Unavailable data
+
+Functions return `nil` when data is unknown, expired, inapplicable, or the request is invalid. Optional table fields are omitted for the same reasons. YAAHA does not invent a price or silently substitute another auction-house type.
+
+Returned tables are defensive snapshots. Changing them does not modify YAAHA's saved or working data.
+
+### Numbers and money
+
+- Item IDs, spell IDs, quantities, counts, skills, and timestamps are numbers; IDs must be positive integers.
+- Market values, prices, and crafting values are whole copper. Positive fractional copper is rounded half-up and remains at least `1` copper.
+- Sale rates and result chances are decimal fractions. For example, `0.311` means `31.1%`.
+- Public sale rates are rounded half-up to at most three decimal places.
+
+## Versioning
+
+The current public API version is `1`. It is independent of YAAHA's addon release version and changes only when consumers must distinguish a new public contract.
 
 ```lua
-local data = YAAHA_API.GetItemData(2589)
-if data then
-    print(data.firstNonZeroMarketValue, data.firstNonZeroMarketSource)
+if YAAHA_API and YAAHA_API.version >= 1 then
+    -- API version 1 is available.
 end
+
+local version = YAAHA_API.GetVersion()
 ```
 
-The returned table is a new snapshot. Changing it does not alter YAAHA's saved data. Raw price observations, personal sale rates, vendor-flip activity, and other private or internal processing data are intentionally not exposed.
+Both `YAAHA_API.version` and `GetVersion()` return the same integer.
 
-Arguments
+## Item market data
 
-| Value | Type | Description |
+### `GetItemData`
+
+```lua
+local data = YAAHA_API.GetItemData(itemID, auctionHouseType)
+```
+
+Returns `nil` when YAAHA has no public data for the item. Otherwise it returns a `YAAHA_API.ItemData` snapshot. Raw observations, personal activity, vendor-flip activity, and other private processing data are intentionally excluded.
+
+| Key | Type | Meaning |
 | --- | --- | --- |
-| `itemID` | `number` | A positive integer item ID. |
-| `auctionHouseType` | `string` or `nil` | Optional. Uses the client-specific rules described under [Auction-house types](#auction-house-types). |
+| `auctionCount` | `integer?` | Number of listings in the current snapshot. |
+| `auctionQuantity` | `integer?` | Number of individual items represented by those listings. |
+| `lastScan` | `integer?` | Server timestamp of the current item snapshot. Omitted when the item was absent from the latest scan. |
+| `minBid` | `integer?` | Lowest payable per-unit bid in copper. |
+| `minBuyout` | `integer?` | Lowest per-unit buyout in copper. |
+| `firstNonZeroMarketValue` | `integer?` | First positive market value in copper from the shortest available time frame. |
+| `firstNonZeroMarketSource` | `string?` | Field which supplied `firstNonZeroMarketValue`. |
+| `currentMarketValue` | `integer?` | Market value calculated from the current scan. |
+| `midweekMarketValue` | `integer?` | Weighted rolling three-day market value. |
+| `weeklyMarketValue` | `integer?` | Weighted rolling seven-day market value. |
+| `biweeklyMarketValue` | `integer?` | Weighted rolling fourteen-day market value. |
+| `monthlyMarketValue` | `integer?` | Weighted rolling thirty-day market value. |
+| `bimonthlyMarketValue` | `integer?` | Weighted rolling sixty-day market value. |
 
-Returns
-
-Returns `nil` if the request is invalid or YAAHA has no public data for the item. Otherwise, it returns a `YAAHA_API.ItemData` table which can contain these keys:
-
-| Key | Type | Description |
-| --- | --- | --- |
-| `auctionCount` | `number` | Number of auction listings for the item in the current scan. |
-| `auctionQuantity` | `number` | Number of individual items represented by the current scan's listings. |
-| `lastScan` | `number` | Server timestamp of the current item snapshot. Omitted when the item was absent from the latest scan. |
-| `minBid` | `number` | Lowest payable per-unit bid in copper from the current scan. |
-| `minBuyout` | `number` | Lowest per-unit buyout in copper from the current scan. |
-| `firstNonZeroMarketValue` | `number` | First positive market value in copper, checking the available time frames from shortest to longest. |
-| `firstNonZeroMarketSource` | `string` | Key which supplied `firstNonZeroMarketValue`, such as `"currentMarketValue"` or `"midweekMarketValue"`. |
-| `currentMarketValue` | `number` | Market value calculated solely from the current scan. |
-| `midweekMarketValue` | `number` | Weighted rolling three-day market value. |
-| `weeklyMarketValue` | `number` | Weighted rolling seven-day market value. |
-| `biweeklyMarketValue` | `number` | Weighted rolling fourteen-day market value. |
-| `monthlyMarketValue` | `number` | Weighted rolling thirty-day market value. |
-| `bimonthlyMarketValue` | `number` | Weighted rolling sixty-day market value. |
-
-Every key is optional. Unknown, expired, and inapplicable values are omitted.
-
-`firstNonZeroMarketValue` checks `currentMarketValue`, `midweekMarketValue`, `weeklyMarketValue`, `biweeklyMarketValue`, `monthlyMarketValue`, and `bimonthlyMarketValue` in that order. `minBid` and `minBuyout` are literal prices and are never considered market-value sources.
+`firstNonZeroMarketValue` checks the six market-value fields from current through sixty-day. Its source is the matching field name. Minimum bid and buyout are literal prices and are never market-value fallbacks.
 
 ### Item-data wrappers
 
-The following functions accept the same `(itemID, auctionHouseType)` arguments as `GetItemData()` and return only the named value or values. Unavailable values are `nil`:
+These functions accept `(itemID, auctionHouseType)` and return only the named value. An unavailable value is `nil`.
 
-| Function | Returned key |
+| Function | Return |
 | --- | --- |
-| `GetAuctionCount()` | `auctionCount` |
-| `GetAuctionQuantity()` | `auctionQuantity` |
-| `GetMinBid()` | `minBid` |
-| `GetMinBuyout()` | `minBuyout` |
-| `GetFirstNonZeroMarketValue()` | `firstNonZeroMarketValue`, `firstNonZeroMarketSource` |
-| `GetCurrentMarketValue()` | `currentMarketValue` |
-| `GetMidweekMarketValue()` | `midweekMarketValue` |
-| `GetWeeklyMarketValue()` | `weeklyMarketValue` |
-| `GetBiweeklyMarketValue()` | `biweeklyMarketValue` |
-| `GetMonthlyMarketValue()` | `monthlyMarketValue` |
-| `GetBimonthlyMarketValue()` | `bimonthlyMarketValue` |
-| `GetLastScanTime()` | `lastScan` |
+| `GetAuctionCount` | `auctionCount` |
+| `GetAuctionQuantity` | `auctionQuantity` |
+| `GetMinBid` | `minBid` |
+| `GetMinBuyout` | `minBuyout` |
+| `GetFirstNonZeroMarketValue` | `firstNonZeroMarketValue, firstNonZeroMarketSource` |
+| `GetCurrentMarketValue` | `currentMarketValue` |
+| `GetMidweekMarketValue` | `midweekMarketValue` |
+| `GetWeeklyMarketValue` | `weeklyMarketValue` |
+| `GetBiweeklyMarketValue` | `biweeklyMarketValue` |
+| `GetMonthlyMarketValue` | `monthlyMarketValue` |
+| `GetBimonthlyMarketValue` | `bimonthlyMarketValue` |
+| `GetLastScanTime` | `lastScan` |
 
-`GetFirstNonZeroMarketValue()` is the only wrapper in this group with two returns:
-
-```lua
-local firstNonZeroMarketValue, firstNonZeroMarketSource = YAAHA_API.GetFirstNonZeroMarketValue(2589)
-```
-
-It returns the selected copper value and its source key, or `nil, nil` when no positive market value is available.
-
-### `GetAuctionHouseStats(auctionHouseType)`
-
-Returns summary information for the latest complete scan or synchronized snapshot of the requested auction house.
+### `GetAuctionHouseStats`
 
 ```lua
-local stats = YAAHA_API.GetAuctionHouseStats("Neutral")
-if stats then
-    print(stats.totalListings, stats.totalItems, stats.lastScan)
-end
+local stats = YAAHA_API.GetAuctionHouseStats(auctionHouseType)
 ```
 
-The returned `YAAHA_API.AuctionHouseStats` table is a defensive snapshot with these keys:
+Returns `nil` when no complete scan or synchronized snapshot is available. Otherwise it returns a `YAAHA_API.AuctionHouseStats` snapshot:
 
-| Key | Type | Description |
+| Key | Type | Meaning |
 | --- | --- | --- |
-| `lastScan` | `number` | Server timestamp of the latest complete auction-house snapshot. |
-| `totalListings` | `number` | Total number of auction listings represented by that snapshot. |
-| `totalItems` | `number` | Number of distinct item IDs represented by that snapshot. |
+| `lastScan` | `integer` | Server timestamp of the latest complete snapshot. |
+| `totalListings` | `integer` | Number of listings represented by the snapshot. |
+| `totalItems` | `integer` | Number of distinct item IDs represented by the snapshot. |
 
-The optional `auctionHouseType` follows the same rules as `GetItemData()`. The function returns `nil` when the request is invalid or no completed snapshot is available.
+## Realm sale metrics
 
-### Realm-data functions
+These functions accept `(itemID, auctionHouseType)`. Each observation expires exactly 60 days after its confirmed auction outcome.
 
-Realm statistics are intentionally exposed one value at a time. They are not included in the table returned by `GetItemData()`, and YAAHA's private, realm-wide personal sale rate is never returned by the public API.
-
-Each function accepts `(itemID, auctionHouseType)` using the same validation, optional faction default, and auction-house separation as `GetItemData()`.
-
-| Function | Return type | Description |
+| Function | Return | Meaning |
 | --- | --- | --- |
-| `GetRealmSaleRate()` | `number` or `nil` | Fraction of resolved auction quantities sold during the rolling 60-day realm-data window. |
-| `GetRealmSoldPerDay()` | `number` or `nil` | Average number of individual items sold per day across the rolling 60-day realm-data window. |
-| `GetRealmAverageSaleValue()` | `number` or `nil` | Average gross per-unit auction sale value in copper during the rolling 60-day realm-data window. |
+| `GetRealmRollingSaleRate` | `number?` | Confirmed sold quantity divided by observed resolved listing and purchase quantity in the rolling window. |
+| `GetRealmRollingSalesPerDay` | `number?` | Confirmed sold quantity divided by YAAHA's observed market window, from one day up to 60 days. |
+| `GetRealmRollingAverageSaleValue` | `integer?` | Average gross per-unit sale value in copper. |
 
-Each observation expires exactly 60 days after its recorded outcome. The private personal sale rate uses the same rolling window. Faction-separated clients keep Alliance, Horde, and Neutral observations isolated. Mists and Retail use their single shared market. These functions return `nil` when the requested value is unavailable or every observation has expired. A known sale rate or daily sold quantity may validly be zero.
+YAAHA treats a confirmed purchase as evidence that the market sold that quantity, whether the buyer later uses, transforms, destroys, vendors, or relists the item. Buyer observations affect only realm metrics; they never affect the private personal sale rate. When guild synchronization supplies both sides of one transaction, YAAHA deduplicates them by Blizzard's auction ID where available or by matching the Classic invoice's seller with the item, quantity, value, and nearby timestamps from both sides. Observations without enough matching evidence remain independent rather than being guessed into one transaction.
 
-### Disenchanting functions
+The quantity is transaction volume, not a count of unique physical items. Buying 127 cloth confirms 127 sold. If three of those are later resold through the auction house, that second transaction adds three more, for 130 observed sales in total. Selling them to an NPC does not create another auction-house sale.
 
-Disenchanting results are universal and are not separated by auction-house type. Expected values use prices from the requested auction house without mixing faction and neutral data.
+Faction-separated clients keep Alliance, Horde, and Neutral observations separate. Mists and Retail use their shared market. These values describe confirmed transactions YAAHA observed or received through guild synchronization; they are not a claim to cover every transaction in the market. A known sale rate or sales-per-day value may validly be `0`; `nil` means there is no usable observation.
 
-| Function | Return type | Description |
-| --- | --- | --- |
-| `IsDisenchantable(itemID)` | `boolean` | Whether YAAHA recognizes the item as disenchantable and has a result range for it. |
-| `GetDisenchantResults(itemID)` | `table` or `nil` | A defensive copy of the item's possible materials, probabilities, quantity ranges, expected quantities, required skill, and learned sample count. |
-| `GetDisenchantValue(itemID, auctionHouseType, fullResults)` | `number`, `table`, or `nil` | Expected value using current prices from the selected auction house's latest scan. Pass `true` for the complete priced breakdown. Missing prices make the total unavailable. |
+The observed window begins when YAAHA first tracks that market. Guild synchronization may move its start earlier when another installation supplies older observations. The denominator has a one-day minimum for a new installation and reaches a maximum of 60 days. Consequently, one item sold during a mature 60-day window returns approximately `0.016667`, while one item sold during the first observed day returns `1`. The API preserves the fractional value; YAAHA applies the user's decimal-place preference only when displaying it.
 
-`GetDisenchantResults()` returns `YAAHA_API.DisenchantResults`. Each `YAAHA_API.DisenchantMaterial` entry in its `results` array contains `itemID`, `chance`, `minQuantity`, `maxQuantity`, and `expectedQuantity`. `chance` is a decimal fraction. `expectedQuantity` already includes the probability of receiving that material.
+Personal sale history is private user activity and is not exposed by the public API.
 
-`sampleCount` is the number of local and synchronized disenchantments YAAHA has learned for that item category and level range. These observations supplement YAAHA's built-in probabilities on every supported game client. A value of `0` means the result still relies entirely on the built-in dataset; a larger value means observed results have increasingly contributed to the estimate.
+## Disenchanting
 
-For each material, expected value uses the first positive source in this order: `currentMarketValue`, `midweekMarketValue`, `weeklyMarketValue`, `biweeklyMarketValue`, `monthlyMarketValue`, then `bimonthlyMarketValue`. Minimum bid and minimum buyout are never used as substitutes.
+Disenchant result ranges are not separated by auction-house type. Pricing those results does use the requested market.
 
-#### Disenchant-value arguments
-
-| Value | Type | Description |
-| --- | --- | --- |
-| `itemID` | `number` | A positive integer item ID. |
-| `auctionHouseType` | `string` or `nil` | Optional auction-house type using the same rules as `GetItemData()`. |
-| `fullResults` | `boolean` or `nil` | Optional. `true` returns the full breakdown; `false` or omitted returns only the summed value. |
-
-#### Disenchanting examples
-
-Get only the expected disenchant value:
+### `IsDisenchantable` and `GetDisenchantResults`
 
 ```lua
-local value = YAAHA_API.GetDisenchantValue(2589)
+local known = YAAHA_API.IsDisenchantable(itemID)
+local breakdown = YAAHA_API.GetDisenchantResults(itemID)
 ```
 
-Request the complete priced breakdown when individual results are needed:
+`IsDisenchantable` returns whether YAAHA recognizes the item and has a result range. `GetDisenchantResults` returns `nil` when it does not, or a `YAAHA_API.DisenchantResults` snapshot:
 
-```lua
-local results = YAAHA_API.GetDisenchantValue(2589, "Alliance", true)
-if results then
-    print(results.expectedValue)
-end
-```
-
-When `fullResults` is `false` or omitted, `GetDisenchantValue()` returns the summed expected value in copper. It returns `nil` when any possible material lacks a positive current market value in the latest scan, because a historical price or partial sum could be mistaken for materials the player can presently obtain or sell.
-
-When `fullResults` is `true`, the function returns a new `YAAHA_API.PricedDisenchantResults` table containing `expectedValue`, `requiredSkill`, `sampleCount`, and a `results` array. The top-level `expectedValue` is `nil` when any material price is missing, while the individual known material values remain available in `results`. Each `YAAHA_API.PricedDisenchantMaterial` contains:
-
-| Key | Type | Description |
+| Key | Type | Meaning |
 | --- | --- | --- |
-| `itemID` | `number` | Resulting enchanting material. |
+| `requiredSkill` | `integer` | Required Enchanting skill. |
+| `sampleCount` | `integer` | Learned local and synchronized observations contributing to the result range. `0` means the built-in dataset is being used without learned observations. |
+| `results` | `DisenchantMaterial[]` | Possible materials. |
+
+Each material contains:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `itemID` | `integer` | Resulting enchanting-material item ID. |
 | `chance` | `number` | Decimal probability of receiving the material. |
-| `minQuantity` | `number` | Minimum possible quantity. |
-| `maxQuantity` | `number` | Maximum possible quantity. |
+| `minQuantity` | `integer` | Minimum possible quantity. |
+| `maxQuantity` | `integer` | Maximum possible quantity. |
 | `expectedQuantity` | `number` | Probability-adjusted expected quantity per disenchant. |
-| `marketValue` | `number` or `nil` | Selected per-unit material value in copper. `nil` means it is unavailable. |
-| `priceSource` | `string` or `nil` | Market-value source selected using YAAHA's defined priority order. |
-| `expectedValue` | `number` or `nil` | This material's probability-adjusted value in copper. `nil` means its price is unavailable. |
-| `missingPrice` | `boolean` | `true` when the material was not found with a positive value in the selected auction database. |
 
-The returned table is a defensive snapshot. Changing it does not modify YAAHA's internal or saved data.
+### `GetDisenchantValue`
+
+```lua
+local value = YAAHA_API.GetDisenchantValue(itemID, auctionHouseType)
+local full = YAAHA_API.GetDisenchantValue(itemID, auctionHouseType, true)
+```
+
+YAAHA prices each possible material with its positive `currentMarketValue` from the selected market. Historical market windows, minimum bids, and minimum buyouts are not substituted. This keeps the result tied to materials present in the latest market snapshot.
+
+Without `fullResults`, the function returns the summed expected value in copper. It returns `nil` when the item is unknown, the request is invalid, or any possible material lacks a current price.
+
+With `fullResults = true`, it returns a `YAAHA_API.PricedDisenchantResults` snapshot only when every possible material has a valid current price. If any price is missing, the entire API call returns `nil`; the public API never exposes a partial priced result:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `expectedValue` | `integer` | Complete expected value in copper. |
+| `requiredSkill` | `integer` | Required Enchanting skill. |
+| `sampleCount` | `integer` | Learned observation count. |
+| `results` | `PricedDisenchantMaterial[]` | Priced possible materials. |
+
+Each priced material contains the fields from `DisenchantMaterial` plus:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `marketValue` | `integer` | Per-unit current market value in copper. |
+| `priceSource` | `string` | `"currentMarketValue"`. |
+| `expectedValue` | `integer` | Probability-adjusted value in copper. |
+| `missingPrice` | `boolean` | Always `false`; incomplete priced results return `nil`. |
+
+## Crafting
+
+YAAHA can value recipes it has recorded from profession windows. Calculations use prices from the requested market and do not mix auction-house types.
 
 ### Crafting functions
 
-YAAHA records recipes when the current character opens a profession window. Crafting calculations use those known recipes and prices from the requested auction house without combining auction-house types.
+```lua
+local value = YAAHA_API.GetCraftingValue(
+    itemID,
+    auctionHouseType,
+    fullResults,
+    currentCharacterOnly
+)
 
-| Function | Description |
+local value = YAAHA_API.GetRecipeCraftingValue(
+    spellID,
+    auctionHouseType,
+    fullResults,
+    currentCharacterOnly
+)
+```
+
+| Function | Meaning |
 | --- | --- |
-| `GetCraftingValue(itemID, auctionHouseType, fullResults, currentCharacterOnly)` | Returns the cheapest known crafting value for an output item. |
-| `GetRecipeCraftingValue(spellID, auctionHouseType, fullResults, currentCharacterOnly)` | Returns the crafting value of a specific known recipe, including direct enchants which have no output item. |
+| `GetCraftingValue` | Finds the least expensive recorded recipe for an output item. |
+| `GetRecipeCraftingValue` | Values one recorded recipe spell, including direct enchants without an output item. |
 
-#### Crafting-value arguments
+`fullResults = true` returns a `CraftingResult`; otherwise the return is only its per-unit `value`. `currentCharacterOnly = true` restricts candidates to the logged-in character. When it is false or omitted, all recipes in the applicable faction-realm profession store may be considered.
 
-| Value | Type | Description |
+Both functions return `nil` when the recipe is unknown or any required material lacks a valid acquisition value. A tradeable reagent absent from the current market remains unavailable unless YAAHA knows another real vendor, conversion, or crafting path. Only soulbound or quest-bound materials may receive a final estimated fallback.
+
+### Crafting results
+
+A full result is a `YAAHA_API.CraftingResult` snapshot:
+
+| Key | Type | Meaning |
 | --- | --- | --- |
-| `itemID` or `spellID` | `number` | Positive integer identifying the crafted item or recipe spell. |
-| `auctionHouseType` | `string` or `nil` | Optional auction-house type using the same rules as `GetItemData()`. |
-| `fullResults` | `boolean` or `nil` | `true` returns the priced recipe and reagent breakdown; otherwise only the per-unit crafting value is returned. |
-| `currentCharacterOnly` | `boolean` or `nil` | `true` restricts recipes to the logged-in character; otherwise all recorded same-faction characters on the realm are considered. |
-
-#### Crafting examples
-
-Get the least expensive known per-unit crafting value for an item:
-
-```lua
-local value = YAAHA_API.GetCraftingValue(6452)
-```
-
-Request the full recipe and material breakdown, restricted to recipes known by the current character:
-
-```lua
-local results = YAAHA_API.GetCraftingValue(6452, nil, true, true)
-if results then
-    print(results.value, results.outputQuantity)
-end
-```
-
-When a reagent used by a known recipe has a recorded unlimited-supply NPC price, YAAHA uses that vendor price. Opening a merchant refreshes the account-wide value with the current character's price, including reputation discounts. Auction listings do not override a dependable unlimited vendor source. Otherwise, YAAHA independently considers the reagent's current market value, conversion value, and recursively calculated crafting value, then uses the least expensive available source. Conversion values use the converted source material's current market value; they do not recursively reuse its vendor or crafting value.
-
-Only when every real price and opportunity-cost source fails, YAAHA may estimate a Blizzard-identified Bind on Pickup or quest-bound reagent as `max(vendorSell, (expansionID + 1) * 1g)`. Blizzard numbers Vanilla as expansion `0`, so its fallback floor is `1g`; each subsequent expansion adds another `1g`. Tradeable reagents never use this fallback: a tradeable item absent from the current auction snapshot remains unavailable unless another valid acquisition path exists.
-
-On supported clients other than Classic Era and Forever, a recorded Potion, Elixir, or Transmutation mastery gives matching Vanilla-through-Mists Alchemy recipes an expected finished-item auction-return multiplier of `1.2`. A qualifying same-faction alchemist may supply that adjustment.
-
-A learned Rank 3 Legion or Battle for Azeroth Alchemy recipe uses an expected output multiplier of `1.4`. This recipe-specific adjustment is independent of the character's older mastery: the systems apply to different recipes and never stack. Warlords of Draenor recipes and Rank 1 or Rank 2 Legion and Battle for Azeroth recipes use the baseline multiplier of `1`.
-
-Expected output multipliers never change required reagents, crafting cost, material cost, or the cost of a crafted item when it is used as a reagent. They apply only when estimating the matching finished recipe's auction return.
-
-Neutral and opposite-faction requests on faction-separated clients use the baseline multiplier of `1` because the recorded alchemist cannot sell directly in those markets.
-
-In Wrath/Titan, an equipment-enchant result represents its auctionable scroll. Its crafting value includes the cheapest compatible armor or weapon vellum available through the same material-cost calculation. Classic Era and Burning Crusade equipment enchants retain their reagent cost but have no auctionable output item.
-
-Profession snapshots from an earlier game-client build are marked as stale. YAAHA prefers a current-build copy of a recipe whenever one is available, but retains a stale recipe as a fallback until that character opens the profession and refreshes it. Full crafting results expose this state to consumers.
-
-Variable-yield recipes divide the total reagent value by their average output. A recipe is unavailable when any required reagent has no usable price. Each positive market, vendor, conversion, crafting, or applicable soulbound-fallback value is rounded to whole copper before use. Per-output crafting values and reagent subtotals exposed by the API use the same half-up rounding. A known nonzero value which would otherwise round to zero becomes `1` copper, while an exact zero remains zero and unavailable data remains `nil`.
-
-When `fullResults` is true, the returned `YAAHA_API.CraftingResult` is a defensive snapshot containing:
-
-| Key | Type | Description |
-| --- | --- | --- |
-| `value` | `number` | Per-unit crafting value in copper. |
-| `totalReagentValue` | `number` | Total reagent value for one recipe cast. |
-| `outputQuantity` | `number` | Fixed output or average of the minimum and maximum output. |
-| `expectedOutputMultiplier` | `number` | Expected finished-item auction-return multiplier: `1` normally, `1.2` for an applicable legacy Alchemy mastery, or `1.4` for a learned Rank 3 Legion or Battle for Azeroth Alchemy recipe. It does not reduce crafting or material costs. |
-| `character` | `string` | Canonical character identity whose known recipe supplied the result (`name-realm` or Forever's `firstName-surname`). |
+| `value` | `integer` | Per-unit crafting value in copper. |
+| `totalReagentValue` | `integer` | Reagent value for one recipe cast in copper. |
+| `outputQuantity` | `number` | Fixed output, or the average of the minimum and maximum output. |
+| `expectedOutputMultiplier` | `number` | Expected finished-item auction-return multiplier from an applicable Alchemy specialization. Current values are `1`, `1.2`, or `1.4`. It never reduces material or crafting costs. |
+| `character` | `string` | Character whose known recipe supplied the result: `name-realm` normally or `firstName surname` on Forever. |
 | `profession` | `string` | Localized profession name. |
-| `stale` | `boolean` | Whether the profession snapshot predates the current game-client build. |
-| `spellID` | `number` | Recipe spell ID. |
-| `outputItemID` | `number` or `nil` | Crafted item ID; absent for a direct enchant. |
+| `stale` | `boolean` | Whether the saved profession snapshot predates the current game-client build. A stale result remains usable until that character refreshes the profession. |
+| `spellID` | `integer` | Recipe spell ID. |
+| `outputItemID` | `integer?` | Crafted item ID; omitted for a direct enchant. |
 | `name` | `string` | Localized recipe name. |
-| `materials` | `table` | Reagent entries containing `itemID`, `quantity`, `unitValue`, `totalValue`, and the selected `source`. Conversion and nested crafting details are included when applicable. |
+| `materials` | `CraftingMaterial[]` | Priced reagents for one recipe cast. |
 
-The material `source` is exactly `"market"`, `"vendor"`, `"convert"`, `"crafting"`, or `"soulboundFallback"`. The last value is possible only for a Bind on Pickup or quest-bound reagent after every higher-priority source failed. The two functions return `nil` when the recipe is unknown or a complete value cannot be calculated.
+### Material results
+
+Each crafting material contains:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `itemID` | `integer` | Reagent item ID. |
+| `quantity` | `number` | Quantity required for one recipe cast. |
+| `unitValue` | `integer` | Selected per-unit value in copper. |
+| `totalValue` | `integer` | Value of the required quantity in copper. |
+| `source` | `string` | Acquisition source which supplied `unitValue`. |
+| `conversion` | `CraftingConversion?` | Single-source conversion details when `source` is `"convert"`; absent for averaged conversion families. |
+| `crafting` | `CraftingResult?` | Nested recipe details when `source` is `"crafting"`. |
+
+`source` has one of these meanings:
+
+| Value | Meaning |
+| --- | --- |
+| `"market"` | The reagent's current market value. |
+| `"vendor"` | A known unlimited-supply NPC price. |
+| `"convert"` | A known conversion or complete averaged conversion family was less expensive. |
+| `"crafting"` | A recorded recipe for the reagent was less expensive. |
+| `"soulboundFallback"` | A last-resort estimate for a soulbound or quest-bound reagent after real values failed. |
+
+A `CraftingConversion` contains the source material's `itemID`, the source `quantity` required for one requested unit, and `priceSource`. Conversion pricing currently uses the source material's `currentMarketValue`, so a present `priceSource` is `"currentMarketValue"`. When several interchangeable conversion paths exist, YAAHA averages their complete per-unit costs before comparing that family with other acquisition methods. Because no individual source represents the average, `conversion` is omitted for that material.
 
 ## Callbacks
 
-YAAHA uses CallbackHandler-1.0 to notify consuming addons after public auction data changes. Register and unregister callbacks directly through `YAAHA_API`; do not retrieve CallbackHandler or YAAHA through LibStub.
-
-The consumer object must be the first argument:
+YAAHA uses CallbackHandler-1.0 internally, but consumers register directly through `YAAHA_API`:
 
 ```lua
 local consumer = {}
 
 function consumer:OnAuctionHouseDataUpdated(event, auctionHouseType, source)
     local stats = YAAHA_API.GetAuctionHouseStats(auctionHouseType)
-    -- YAAHA's updated data is ready to query here.
+    -- The complete updated snapshot is ready to query here.
 end
 
 YAAHA_API.RegisterCallback(
@@ -348,76 +336,28 @@ YAAHA_API.RegisterCallback(
 )
 ```
 
-Consumers should unregister callbacks when they no longer need notifications:
+Available registration helpers are:
 
-```lua
-YAAHA_API.UnregisterCallback(consumer, "AUCTION_HOUSE_DATA_UPDATED")
-```
+| Function | Purpose |
+| --- | --- |
+| `RegisterCallback(receiver, event, method, arg)` | Registers a method name or callback function. When supplied, `arg` is inserted before the callback's normal event arguments. |
+| `UnregisterCallback(receiver, event)` | Removes the receiver's registration for one event. |
+| `UnregisterAllCallbacks(receiver)` | Removes all registrations for the receiver. |
 
 ### `AUCTION_HOUSE_DATA_UPDATED`
 
-Fires once for each auction-house database which actually changed, after YAAHA has committed and recalculated its complete data.
+Fires after YAAHA commits and recalculates a complete auction-house database which actually changed.
 
-| Callback value | Type | Description |
+| Argument | Type | Meaning |
 | --- | --- | --- |
 | `event` | `string` | Always `"AUCTION_HOUSE_DATA_UPDATED"`. |
-| `auctionHouseType` | `string` | `"Alliance"`, `"Horde"`, or `"Neutral"` on faction-separated clients; `"Shared"` on clients with one shared auction house. |
-| `source` | `string` | `"scan"` for a completed local scan or `"sync"` for newly merged synchronized data. |
+| `auctionHouseType` | `string` | `"Alliance"`, `"Horde"`, or `"Neutral"` on faction-separated clients; `"Shared"` on shared-market clients. |
+| `source` | `string` | `"scan"` for a completed local scan or `"sync"` for newly merged guild data. |
 
-A synchronized packet which contains no newer or otherwise missing data does not fire the callback. Callback recipients may query any public API function immediately; they never observe a partially processed scan or merge.
+A synchronized packet which adds no newer or missing data does not fire the callback. Consumers may query the API immediately from the callback and will not observe a partially processed scan or merge.
 
-## Conventions
+## Editor support
 
-These conventions apply to data functions as they are added to the public API.
+`API.lua` publishes [WoWLua-LS](https://tradeskillmaster.github.io/wowlua-ls/guide/why-wowlua-ls) annotations for the global API, accepted auction-house strings, callbacks, and return tables. When YAAHA's source is visible to the language server, consumers receive completion, hover documentation, literal suggestions, argument checking, and nil-aware return types.
 
-### Function calls
-
-Public functions use dot-call syntax:
-
-```lua
-local value = YAAHA_API.GetVersion()
-```
-
-They are not object methods and should not be called with a colon.
-
-### Auction-house types
-
-On Classic Era, Burning Crusade, Wrath/Titan, and Forever, omitting `auctionHouseType` or passing `nil` accesses the current character's faction auction-house database. Explicit `"Alliance"`, `"Horde"`, and `"Neutral"` values access only their corresponding databases. Opposite-faction data is available when YAAHA has received or recorded it. YAAHA never substitutes or combines another market on these clients.
-
-Mists and Retail have one shared auction house rather than separate faction and neutral markets. On those clients, omitting the argument or passing `"Alliance"`, `"Horde"`, `"Neutral"`, or `"Shared"` accesses that same shared database. Callbacks identify it as `"Shared"`. Other strings are invalid on every client.
-
-Some modern commodities are traded across a region, but YAAHA has no external service which aggregates region-wide sales. Its public values remain the data visible through the local auction house and YAAHA's realm-derived sale observations; the API does not claim to provide region-wide statistics.
-
-### Unavailable data
-
-Data functions return `nil` when a requested value is unknown, unavailable, expired, or does not apply. The API does not silently substitute data from another faction or auction-house type.
-
-### Sale rates
-
-Sale rates are returned as decimal fractions rather than display percentages. They are rounded half-up to at most three decimal places.
-
-```text
-0.3104 → 0.310
-0.3105 → 0.311
-0.3114 → 0.311
-0.3115 → 0.312
-```
-
-For display, consumers may multiply the returned value by 100. For example, `0.311` represents `31.1%`.
-
-### Copper values
-
-Monetary values are returned as whole copper. Values of at least one copper use half-up rounding to the nearest whole copper. Any positive value below one copper is rounded up to one copper so that a real positive value is never reported as zero.
-
-```text
-nil  → nil
-0    → nil
-0.01 → 1
-0.49 → 1
-0.99 → 1
-1.20 → 1
-1.49 → 1
-1.50 → 2
-```
-
-Negative monetary values are invalid and are not returned.
+Supporting names such as `YAAHA_API.ItemData` and `YAAHA_API.CraftingResult` are editor metadata, not runtime fields consumers must access.

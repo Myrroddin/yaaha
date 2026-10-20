@@ -142,7 +142,7 @@ local function CreateWorkspace()
 		return
 	end
 
-	-- Every supported client currently uses the classic AuctionFrame. Resolve it
+	-- Clients which load this adapter expose the classic AuctionFrame. Resolve it
 	-- only after Blizzard's load-on-demand auction UI has been created.
 	auctionFrame = AuctionFrame
 	if not auctionFrame then

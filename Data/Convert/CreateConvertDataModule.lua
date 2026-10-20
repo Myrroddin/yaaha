@@ -1,7 +1,6 @@
 -- Creates the shared deterministic-conversion module used by crafting costs and tooltips.
 
 local C_Item = C_Item
-local huge = math.huge
 local LibStub = LibStub
 local next = next
 local pairs = pairs
@@ -24,10 +23,6 @@ local function GetItemID(itemInfo)
 	return itemInfo and C_Item.GetItemInfoInstant(itemInfo) or nil
 end
 
----@param targetItemID integer
----@param sourceItemID integer
----@param sourcePerTarget number
----@param tooltipOnly? boolean
 function module:AddConversion(targetItemID, sourceItemID, sourcePerTarget, tooltipOnly)
 	if not tooltipOnly then
 		local sources = costConversions[targetItemID]
@@ -46,10 +41,6 @@ function module:AddConversion(targetItemID, sourceItemID, sourcePerTarget, toolt
 	sources[sourceItemID] = sourcePerTarget
 end
 
----@param firstItemID integer
----@param secondItemID integer
----@param secondPerFirst number
----@param tooltipOnly? boolean
 function module:AddReversibleConversion(firstItemID, secondItemID, secondPerFirst, tooltipOnly)
 	self:AddConversion(firstItemID, secondItemID, secondPerFirst, tooltipOnly)
 	self:AddConversion(secondItemID, firstItemID, 1 / secondPerFirst, tooltipOnly)
@@ -86,7 +77,9 @@ function module:GetValue(itemInfo, scope, priceDB)
 	local auctionDB = priceDB or addon.db[scope or "factionrealm"].auctionDB
 	local results = {}
 	local conversionCost
-	local bestResult
+	local conversionTotal = 0
+	local pricedPaths = 0
+	local allPathsPriced = true
 	for sourceItemID, sourcePerTarget in pairs(sources) do
 		local prices = auctionDB[sourceItemID]
 		local marketValue = addon:GetCurrentMarketValue(prices)
@@ -101,10 +94,18 @@ function module:GetValue(itemInfo, scope, priceDB)
 			totalValue = totalValue,
 		}
 		results[#results + 1] = result
-		if totalValue and totalValue < (conversionCost or huge) then
-			conversionCost = totalValue
-			bestResult = result
+		if not totalValue then
+			allPathsPriced = false
+		else
+			conversionTotal = conversionTotal + totalValue
+			pricedPaths = pricedPaths + 1
 		end
+	end
+	if pricedPaths > 0 then
+		-- Interchangeable paths form one stable expected-cost candidate. The
+		-- broader material resolver compares this average with market, vendor,
+		-- crafting, and other independently complete acquisition methods.
+		conversionCost = addon:RoundMoney(conversionTotal / pricedPaths)
 	end
 
 	sort(results, function(left, right)
@@ -114,7 +115,11 @@ function module:GetValue(itemInfo, scope, priceDB)
 		itemID = itemID,
 		results = results,
 		value = conversionCost,
-		bestResult = bestResult,
+		-- A single-source conversion can name an exact recommendation. No one
+		-- source honestly represents an averaged family of alternatives.
+		bestResult = pricedPaths == 1 and #results == 1 and results[1] or nil,
 		alternatives = #results > 1,
+		complete = pricedPaths > 0,
+		allPathsPriced = allPathsPriced,
 	}
 end

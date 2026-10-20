@@ -427,6 +427,7 @@ function module:BuyCandidate(candidate)
 	SetStatus(L["Waiting for the auction house..."])
 	pendingPurchase = saleCollector:RecordPendingPurchase("list", listing.index, listing.buyout, "buy", "disenchant")
 	PlaceAuctionBid("list", listing.index, listing.buyout)
+	saleCollector:ReleasePendingPurchaseHook(pendingPurchase)
 end
 
 function module:SkipCandidate(candidate)
