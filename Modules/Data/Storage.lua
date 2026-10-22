@@ -2,9 +2,6 @@
 
 local C_AutoComplete = C_AutoComplete
 local C_EncodingUtil = C_EncodingUtil
-local Enum = Enum
-local FACTION_ALLIANCE = FACTION_ALLIANCE
-local FACTION_HORDE = FACTION_HORDE
 local FACTION_NEUTRAL = FACTION_NEUTRAL
 local format = string.format
 local GetNormalizedRealmName = GetNormalizedRealmName
@@ -16,25 +13,25 @@ local sort = table.sort
 local stringGsub = string.gsub
 local stringSub = string.sub
 local type = type
-local UnitFactionGroup = UnitFactionGroup
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("Storage", "AceEvent-3.0")
-local usesSharedAuctionHouse = addon.UsesSharedAuctionHouse
+local usesSharedAuctionHouse = addon.usesSharedAuctionHouse
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
-local BASE64_VARIANT = Enum.Base64Variant.StandardUrlSafe
-local COMPRESSION_METHOD = Enum.CompressionMethod.Zlib
+local BASE64_VARIANT = addon.base64Variant
+local COMPRESSION_METHOD = addon.compressionMethod
 local FORMAT_VERSION = 1
-local playerFaction, localizedPlayerFaction = UnitFactionGroup("player")
-local oppositeFaction = playerFaction == "Alliance" and "Horde" or "Alliance"
-local oppositeFactionName = oppositeFaction == "Alliance" and FACTION_ALLIANCE or FACTION_HORDE
 local oppositeFactionData
 local oppositeFactionKey
 local oppositeFactionLoaded = false
 local previousPayloads = {}
 local restoreFailed = {}
 local SCOPES = { "factionrealm", "realm" }
+
+local function SortByLastScan(left, right)
+	return left.lastScan > right.lastScan
+end
 
 local function InitializeFactionScope(scopeDB)
 	scopeDB.auctionDB = scopeDB.auctionDB or {}
@@ -45,7 +42,7 @@ end
 local function ScopeName(scope)
 	return usesSharedAuctionHouse and L["Shared"]
 		or scope == "realm" and FACTION_NEUTRAL
-		or localizedPlayerFaction or playerFaction
+		or addon.localizedPlayerFaction or addon.playerFaction
 end
 
 local function EncodeAuctionDB(auctionDB)
@@ -105,6 +102,9 @@ end
 local function LoadOppositeFactionData()
 	oppositeFactionLoaded = true
 	oppositeFactionData = nil
+	if usesSharedAuctionHouse or not addon.oppositeFaction then
+		return
+	end
 
 	-- AceDB exposes only the active faction-realm directly. Read the raw scopes to
 	-- find the freshest opposite-faction database from this Connected Realm group.
@@ -119,7 +119,7 @@ local function LoadOppositeFactionData()
 		connectedRealms[realm] = true
 	end
 
-	local prefix = oppositeFaction .. " - "
+	local prefix = addon.oppositeFaction .. " - "
 	local candidates = {}
 	for key, scopeDB in pairs(addon.db.sv.factionrealm or {}) do
 		if stringSub(key, 1, #prefix) == prefix then
@@ -133,9 +133,7 @@ local function LoadOppositeFactionData()
 			end
 		end
 	end
-	sort(candidates, function(left, right)
-		return left.lastScan > right.lastScan
-	end)
+	sort(candidates, SortByLastScan)
 
 	for index = 1, #candidates do
 		local scopeDB = candidates[index].db
@@ -161,10 +159,10 @@ end
 
 local function CreateOppositeFactionData()
 	local realm = GetNormalizedRealmName()
-	if not realm then
+	if not realm or not addon.oppositeFaction then
 		return
 	end
-	oppositeFactionKey = oppositeFaction .. " - " .. realm
+	oppositeFactionKey = addon.oppositeFaction .. " - " .. realm
 	local scopes = addon.db.sv.factionrealm
 	scopes[oppositeFactionKey] = scopes[oppositeFactionKey] or {}
 	oppositeFactionData = InitializeFactionScope(scopes[oppositeFactionKey])
@@ -256,14 +254,14 @@ function module:GetOppositeFactionData()
 	if not oppositeFactionLoaded then
 		LoadOppositeFactionData()
 	end
-	return oppositeFactionData, oppositeFactionName
+	return oppositeFactionData, addon.oppositeFactionName
 end
 
 function module:GetOrCreateOppositeFactionData()
 	if not oppositeFactionLoaded then
 		LoadOppositeFactionData()
 	end
-	return oppositeFactionData or CreateOppositeFactionData(), oppositeFactionName
+	return oppositeFactionData or CreateOppositeFactionData(), addon.oppositeFactionName
 end
 
 function module:PLAYER_LOGOUT()
@@ -272,15 +270,14 @@ function module:PLAYER_LOGOUT()
 		StoreScope(scope)
 	end
 	if oppositeFactionData then
-		local key = oppositeFactionKey or oppositeFaction
 		local auctionDB = oppositeFactionData.auctionDB
 		local payload = type(auctionDB) == "table" and next(auctionDB)
 			and EncodeAuctionDB(auctionDB) or nil
-		if payload then
+		if payload and oppositeFactionKey then
 			oppositeFactionData.compressedAuctionDB = {
 				version = FORMAT_VERSION,
 				payload = payload,
-				backupPayload = previousPayloads[key],
+				backupPayload = previousPayloads[oppositeFactionKey],
 			}
 			oppositeFactionData.auctionDB = nil
 		end

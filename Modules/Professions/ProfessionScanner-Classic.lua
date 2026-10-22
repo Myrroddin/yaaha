@@ -39,11 +39,11 @@ local select = select
 local tonumber = tonumber
 local UNKNOWN = UNKNOWN
 
-local ALCHEMY_SKILL_LINE = 171
 local MINING_SPELL_ID = 2575
 local SMELTING_SPELL_ID = 2656
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
+local ALCHEMY_SKILL_LINE = addon.alchemySkillLineID
 local module = addon:GetModule("ProfessionScanner")
 local enchantingCraftData = addon:GetModule("EnchantingCraftData")
 -- Wrath and Mists map direct enchant spells to auctionable scroll items.

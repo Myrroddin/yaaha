@@ -28,10 +28,9 @@ local ShoppingTooltip1 = ShoppingTooltip1
 local ShoppingTooltip2 = ShoppingTooltip2
 local ShoppingTooltip3 = ShoppingTooltip3
 local tostring = tostring
-local UnitFactionGroup = UnitFactionGroup
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
-local usesSharedAuctionHouse = addon.UsesSharedAuctionHouse
+local usesSharedAuctionHouse = addon.usesSharedAuctionHouse
 local module = addon:NewModule("Tooltip")
 local convertData = addon:GetModule("ConvertData")
 local disenchantingData = addon:GetModule("DisenchantingData")
@@ -41,7 +40,6 @@ local professionScanner = addon:GetModule("ProfessionScanner")
 local prospectingData = addon:GetModule("ProspectingData", true)
 local saleCollector = addon:GetModule("SaleCollector")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
-local playerFaction, localizedPlayerFaction = UnitFactionGroup("player")
 local storage
 local breakdownDataModules = { disenchantingData }
 if prospectingData then
@@ -92,8 +90,8 @@ AddTooltip(ItemRefShoppingTooltip1)
 AddTooltip(ItemRefShoppingTooltip2)
 local tooltipState = setmetatable({}, { __mode = "k" })
 local tooltipDisplayState = setmetatable({}, { __mode = "k" })
-local GREEN_NUMBER = "|cff20ff20"
-local RED_NUMBER = "|cffff2020"
+local GREEN_NUMBER = addon.positiveNumberColor
+local RED_NUMBER = addon.negativeNumberColor
 local CRAFT_SALE_VALUE_FIELDS = {
 	"minBuyout",
 	"midweekMarketValue",
@@ -210,7 +208,8 @@ local function GetContext(scope)
 	if scope == "realm" then
 		return scope, addon.db.realm, FACTION_NEUTRAL
 	elseif scope == "factionrealm" then
-		return scope, addon.db.factionrealm, localizedPlayerFaction or playerFaction
+		return scope, addon.db.factionrealm,
+			addon.localizedPlayerFaction or addon.playerFaction
 	end
 
 	-- ALT is intentionally checked first so neutral wins when both auction-house
@@ -226,10 +225,33 @@ local function GetContext(scope)
 			return "opposite", oppositeDB, oppositeName
 		end
 	end
-	return "factionrealm", addon.db.factionrealm, localizedPlayerFaction or playerFaction
+	return "factionrealm", addon.db.factionrealm,
+		addon.localizedPlayerFaction or addon.playerFaction
 end
 
-local function AddCraftingLines(AddLine, result, showBreakdown, multiplier)
+local function CreateLineState(tooltip, scopeName, addedHeader)
+	return {
+		addedHeader = addedHeader,
+		scopeName = scopeName,
+		tooltip = tooltip,
+	}
+end
+
+local function AddTooltipLine(state, section, label, value)
+	if not state.addedHeader then
+		state.tooltip:AddLine(" ")
+		state.tooltip:AddLine("YAAHA", 1, 0.82, 0)
+		state.tooltip:AddLine(format(L["----- %s -----"], state.scopeName), 0.75, 0.75, 0.75)
+		state.addedHeader = true
+	end
+	if state.activeSection ~= section then
+		state.tooltip:AddLine(section, 1, 0.82, 0)
+		state.activeSection = section
+	end
+	state.tooltip:AddDoubleLine("  " .. label, value, 1, 1, 1, 1, 1, 1)
+end
+
+local function AddCraftingLines(lineState, result, showBreakdown, multiplier)
 	if not result or not showBreakdown then
 		return
 	end
@@ -241,14 +263,14 @@ local function AddCraftingLines(AddLine, result, showBreakdown, multiplier)
 			FormatExpectedQuantity(material.quantity * quantityScale))
 		local value = material.totalValue
 			and addon:FormatMoney(material.totalValue * quantityScale) or "--"
-		AddLine(L["Crafting"], label, value)
+		AddTooltipLine(lineState, L["Crafting"], label, value)
 		-- Keep the recipe's actual reagent above; this is only the cheaper way
 		-- to obtain it and never changes the saved recipe requirements.
 		if material.source == "convert" and material.detail then
 			local convertedName, convertedLink = C_Item.GetItemInfo(material.detail.itemID)
 			local sourceQuantity = material.detail.quantity < 1 and 1 or material.detail.quantity
 			local resultQuantity = material.detail.quantity < 1 and 1 / material.detail.quantity or 1
-			AddLine(L["Crafting"], format(L["Cheaper conversion: %s x%s -> %s x%s"],
+			AddTooltipLine(lineState, L["Crafting"], format(L["Cheaper conversion: %s x%s -> %s x%s"],
 				convertedLink or convertedName or tostring(material.detail.itemID),
 				FormatExpectedQuantity(sourceQuantity), link or name or tostring(material.itemID),
 				FormatExpectedQuantity(resultQuantity)), "")
@@ -326,24 +348,7 @@ function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 
 	local multiplier = GetCursorStackCount(itemID)
 	local auctionCut = auctionHouseType == "Neutral" and 0.85 or 0.95
-	local activeSection, addedHeader
-	local function EnsureHeader()
-		if not addedHeader then
-			tooltip:AddLine(" ")
-			tooltip:AddLine("YAAHA", 1, 0.82, 0)
-			tooltip:AddLine(format(L["----- %s -----"], scopeName), 0.75, 0.75, 0.75)
-			addedHeader = true
-		end
-	end
-	local function AddLine(section, label, value)
-		EnsureHeader()
-		if activeSection ~= section then
-			tooltip:AddLine(section, 1, 0.82, 0)
-			activeSection = section
-		end
-		label = "  " .. label
-		tooltip:AddDoubleLine(label, value, 1, 1, 1, 1, 1, 1)
-	end
+	local lineState = CreateLineState(tooltip, scopeName)
 
 	for index = 1, #auctionPriceFields do
 		local field = auctionPriceFields[index]
@@ -356,12 +361,13 @@ function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 			if trend then
 				display = display .. "  " .. trend
 			end
-			AddLine(AUCTIONS, L[field[2]], display)
+			AddTooltipLine(lineState, AUCTIONS, L[field[2]], display)
 		end
 	end
 
 	if settings["09-auctionQuantity"] and data.auctionQuantity and data.auctionQuantity >= 1 then
-		AddLine(AUCTIONS, AUCTION_HOUSE_BROWSE_HEADER_QUANTITY, FormatQuantity(data.auctionQuantity))
+		AddTooltipLine(lineState, AUCTIONS, AUCTION_HOUSE_BROWSE_HEADER_QUANTITY,
+			FormatQuantity(data.auctionQuantity))
 	end
 
 	for index = 1, #vendorPriceFields do
@@ -370,7 +376,8 @@ function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 		local value = key == "vendorSell" and vendorSell or vendorBuy
 		if settings[field[3]] and value and value > 0 then
 			local label = key == "vendorSell" and field[2] or L[field[2]]
-			AddLine(L["Vendor prices"], label, addon:FormatMoney(value * multiplier))
+			AddTooltipLine(lineState, L["Vendor prices"], label,
+				addon:FormatMoney(value * multiplier))
 		end
 	end
 
@@ -383,25 +390,25 @@ function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 			or key == "realmRollingAverageSaleValue" and realmRollingAverageSaleValue or data[key]
 		if settings[field[4]] and value ~= nil then
 			if kind == "rate" and value >= 0 and value <= 1 then
-				AddLine(L["Sales"], L[field[2]], FormatRate(value))
+				AddTooltipLine(lineState, L["Sales"], L[field[2]], FormatRate(value))
 			elseif kind == "decimal" and value >= 0 then
-				AddLine(L["Sales"], L[field[2]], addon:FormatDecimal(value) or "")
+				AddTooltipLine(lineState, L["Sales"], L[field[2]], addon:FormatDecimal(value) or "")
 			elseif kind == "quantity" and value >= 0 then
-				AddLine(L["Sales"], L[field[2]], FormatQuantity(value))
+				AddTooltipLine(lineState, L["Sales"], L[field[2]], FormatQuantity(value))
 			elseif kind == "money" and value > 0 then
-				AddLine(L["Sales"], L[field[2]], addon:FormatMoney(value))
+				AddTooltipLine(lineState, L["Sales"], L[field[2]], addon:FormatMoney(value))
 			end
 		end
 	end
 	if settings["14-inventoryAverageBuy"] and inventoryBuy and inventoryBuy > 0 then
-		AddLine(L["Purchases"], L["Inventory average buy"],
+		AddTooltipLine(lineState, L["Purchases"], L["Inventory average buy"],
 			addon:FormatMoney(inventoryBuy * multiplier))
 	end
 	if settings["19-craftingValue"] and knownCraft then
-		AddLine(L["Crafting"], L["Crafting cost"],
+		AddTooltipLine(lineState, L["Crafting"], L["Crafting cost"],
 			FormatCraftingValue(factionCrafting, multiplier, data, auctionCut))
 	end
-	AddCraftingLines(AddLine, factionCrafting, settings["20-craftingResults"], multiplier)
+	AddCraftingLines(lineState, factionCrafting, settings["20-craftingResults"], multiplier)
 
 	if breakdown and settings["11-breakdownResults"] then
 		for index = 1, #breakdown.results do
@@ -417,7 +424,7 @@ function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 			else
 				value = value .. "  " .. addon:FormatMoney(result.expectedValue * quantityScale)
 			end
-			AddLine(L["Breakdown"], label, value)
+			AddTooltipLine(lineState, L["Breakdown"], label, value)
 		end
 	end
 	if breakdown and settings["10-breakdownValue"] then
@@ -425,12 +432,12 @@ function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 			and breakdown.expectedUnitValue * multiplier
 			or breakdown.expectedValue
 			and breakdown.expectedValue * multiplier / (breakdown.requiredQuantity or 1)
-		AddLine(L["Breakdown"], L["Expected breakdown value"],
+		AddTooltipLine(lineState, L["Breakdown"], L["Expected breakdown value"],
 			expectedValue and addon:FormatMoney(expectedValue, true) or "--")
 	end
 
 	if conversion and settings["21-conversionValue"] then
-		AddLine(L["Conversion"], L["Conversion cost"],
+		AddTooltipLine(lineState, L["Conversion"], L["Conversion cost"],
 			conversion.value and addon:FormatMoney(conversion.value * multiplier, true) or "--")
 	end
 	if conversion and settings["22-conversionResults"] then
@@ -440,7 +447,7 @@ function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 			local label = format(L["%s x%s"],
 				sourceLink or sourceName or tostring(result.itemID),
 				FormatExpectedQuantity(result.quantity * multiplier))
-			AddLine(L["Conversion"], label,
+			AddTooltipLine(lineState, L["Conversion"], label,
 				result.totalValue and addon:FormatMoney(result.totalValue * multiplier) or "--")
 		end
 	end
@@ -449,13 +456,13 @@ function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 		local result = conversion.bestResult
 		local sourceName, sourceLink = C_Item.GetItemInfo(result.itemID)
 		local targetName, targetLink = C_Item.GetItemInfo(itemID)
-		AddLine(L["Conversion"], format(L["Cheaper conversion: %s x%s -> %s x%s"],
+		AddTooltipLine(lineState, L["Conversion"], format(L["Cheaper conversion: %s x%s -> %s x%s"],
 			sourceLink or sourceName or tostring(result.itemID),
 			FormatExpectedQuantity(result.quantity * multiplier),
 			targetLink or targetName or tostring(itemID), FormatExpectedQuantity(multiplier)), "")
 	end
 
-	if addedHeader and not suppressRefresh then
+	if lineState.addedHeader and not suppressRefresh then
 		tooltip:Show()
 	end
 end
@@ -474,31 +481,17 @@ function module:AddRecipeData(tooltip, spellID, scope, reuseHeader, suppressRefr
 		return
 	end
 
-	local activeSection
-	local addedHeader = reuseHeader
-	local function AddLine(section, label, value)
-		if not addedHeader then
-			tooltip:AddLine(" ")
-			tooltip:AddLine("YAAHA", 1, 0.82, 0)
-			tooltip:AddLine(format(L["----- %s -----"], scopeName), 0.75, 0.75, 0.75)
-			addedHeader = true
-		end
-		if activeSection ~= section then
-			tooltip:AddLine(section, 1, 0.82, 0)
-			activeSection = section
-		end
-		tooltip:AddDoubleLine("  " .. label, value, 1, 1, 1, 1, 1, 1)
-	end
+	local lineState = CreateLineState(tooltip, scopeName, reuseHeader)
 
 	if settings["19-craftingValue"] then
-		AddLine(L["Crafting"], L["Crafting cost"],
+		AddTooltipLine(lineState, L["Crafting"], L["Crafting cost"],
 			FormatCraftingValue(factionCrafting, 1,
 				factionCrafting and factionCrafting.outputItemID
 					and scopeDB.auctionDB[factionCrafting.outputItemID],
 				activeScope == "realm" and 0.85 or 0.95))
 	end
-	AddCraftingLines(AddLine, factionCrafting, settings["20-craftingResults"], 1)
-	if addedHeader and not suppressRefresh then
+	AddCraftingLines(lineState, factionCrafting, settings["20-craftingResults"], 1)
+	if lineState.addedHeader and not suppressRefresh then
 		tooltip:Show()
 	end
 end

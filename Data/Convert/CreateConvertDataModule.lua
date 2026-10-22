@@ -10,6 +10,10 @@ local type = type
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("ConvertData")
 
+local function SortByItemID(left, right)
+	return left.itemID < right.itemID
+end
+
 -- Cost conversions contain only transformations that every character can use.
 -- Tooltip conversions also include profession-gated transformations so players
 -- can evaluate materials without logging onto the character who can perform one.
@@ -108,9 +112,7 @@ function module:GetValue(itemInfo, scope, priceDB)
 		conversionCost = addon:RoundMoney(conversionTotal / pricedPaths)
 	end
 
-	sort(results, function(left, right)
-		return left.itemID < right.itemID
-	end)
+	sort(results, SortByItemID)
 	return {
 		itemID = itemID,
 		results = results,

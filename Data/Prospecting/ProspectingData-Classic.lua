@@ -3,6 +3,7 @@
 local LibStub = LibStub
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
+local isWrath = addon.isWrath
 ---@class ProspectingData: VariableConversionDataModule
 local module = addon:NewModule("ProspectingData")
 local definitions = {}
@@ -163,7 +164,7 @@ do
 	})
 end
 
-if addon.IsWrath then
+if isWrath then
 	-- Wrath retains all preceding ores and adds the Northrend ores below.
 	AddOre(36909, 350, 0.24, 0.25, 0.014, 0.013, false) -- Cobalt Ore
 	AddOre(36912, 400, 0.18, 0.20, 0.04, 0.04, false) -- Saronite Ore

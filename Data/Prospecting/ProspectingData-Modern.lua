@@ -6,6 +6,7 @@
 local LibStub = LibStub
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
+local isStandard = addon.isStandard
 ---@class ProspectingData: VariableConversionDataModule
 local module = addon:NewModule("ProspectingData")
 local definitions = {}
@@ -593,7 +594,7 @@ local function ApplyStandardExtensions()
 end
 
 AddMistsBaseline()
-if addon.IsStandard then
+if isStandard then
 	ApplyStandardExtensions()
 end
 

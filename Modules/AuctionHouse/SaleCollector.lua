@@ -34,12 +34,12 @@ local vendorFlipTracking
 local invoices = {}
 local mailboxOpen = false
 local moneyMail = {}
-local SECONDS_PER_DAY = 24 * 60 * 60
-local SALE_HISTORY_DAYS = 60
-local SALE_HISTORY_SECONDS = SALE_HISTORY_DAYS * SECONDS_PER_DAY
+local SECONDS_PER_DAY = addon.secondsPerDay
+local SALE_HISTORY_DAYS = addon.saleHistoryDays
+local SALE_HISTORY_SECONDS = addon.saleHistorySeconds
 local SALE_MATCH_SECONDS = 2 * 60 * 60
 local AUCTION_MAIL_LIFETIME_DAYS = 30
-local AUCTION_HOUSE_TYPES = addon.UsesSharedAuctionHouse
+local AUCTION_HOUSE_TYPES = addon.usesSharedAuctionHouse
 	and { "Shared" } or { "Alliance", "Horde", "Neutral" }
 local playerFullName
 local classicPurchaseHookClaim
@@ -99,10 +99,22 @@ local function ApplyInvoiceSeller(purchase, seller)
 	return true
 end
 
+local function ResolveListingAuctionHouseType(scope, listing)
+	-- Seller invoices omit the market type. Recover it from the ledger scope, which
+	-- also repairs entries saved before listings stored auctionHouseType directly.
+	local auctionHouseType = listing.auctionHouseType or addon:GetAuctionHouseTypeForScope(scope)
+	if auctionHouseType then
+		listing.auctionHouseType = auctionHouseType
+	end
+	return auctionHouseType
+end
+
 local function MatchKey(auctionHouseType, itemID, count, saleValue, seller, auctionID)
 	-- Modern auction IDs are authoritative. Classic lacks them, so its fingerprint
 	-- deliberately combines every invoice field available without exposing names.
-	if auctionID then
+	if not auctionHouseType then
+		return
+	elseif auctionID then
 		return format("auction\031%s\031%d\031%d\031%d",
 			auctionHouseType, auctionID, count, saleValue)
 	elseif seller then
@@ -329,6 +341,10 @@ local function PruneSaleLedger(scope, now)
 end
 
 local function AddSaleLedgerEntry(scope, listing)
+	local auctionHouseType = ResolveListingAuctionHouseType(scope, listing)
+	if not auctionHouseType then
+		return false
+	end
 	local ledger = addon.db.char.saleLedger[scope]
 	if not ledger then
 		ledger = {}
@@ -337,7 +353,7 @@ local function AddSaleLedgerEntry(scope, listing)
 	PruneSaleLedger(scope, GetServerTime())
 	ledger[#ledger + 1] = {
 		auctionID = listing.auctionID,
-		auctionHouseType = listing.auctionHouseType,
+		auctionHouseType = auctionHouseType,
 		itemID = listing.itemID,
 		name = listing.name,
 		count = listing.count,
@@ -348,6 +364,7 @@ local function AddSaleLedgerEntry(scope, listing)
 		seller = listing.seller,
 		timestamp = GetServerTime(),
 	}
+	return true
 end
 
 local function RemoveSaleLedgerEntry(scope, listing)
@@ -365,29 +382,38 @@ local function RemoveSaleLedgerEntry(scope, listing)
 	end
 end
 
-local function RecordSale(listing, saleValue, timestamp)
+local function RecordSale(scope, listing, saleValue, timestamp)
+	local auctionHouseType = ResolveListingAuctionHouseType(scope, listing)
+	if not auctionHouseType then
+		return false
+	end
 	listing.seller = listing.seller or playerFullName
 	-- A vanished owner listing is initially a cancellation or expiry. Seller mail can
 	-- later prove that exact posting sold, in which case its provisional failure must
 	-- be replaced rather than counted alongside the successful outcome.
-	RemoveRealmFailure(listing.auctionHouseType, listing.itemID, listing.resolutionKey)
+	RemoveRealmFailure(auctionHouseType, listing.itemID, listing.resolutionKey)
 	RemovePersonalFailure(listing.itemID, listing.resolutionKey)
 	RecordPersonalObservation(listing.itemID, listing.count, listing.count, saleValue,
 		"seller", listing.resolutionKey, timestamp)
 	-- Realm rates describe outcomes resolved during the rolling window. The original
 	-- posting may be hours or days older, so carry both sides of this outcome here.
-	RecordRealmObservation(listing.auctionHouseType, listing.itemID, listing.count, listing.count, saleValue,
+	RecordRealmObservation(auctionHouseType, listing.itemID, listing.count, listing.count, saleValue,
 		"seller", TransactionKey(listing.itemID, listing.count, saleValue),
 		listing.resolutionKey, timestamp,
-		MatchKey(listing.auctionHouseType, listing.itemID, listing.count, saleValue,
+		MatchKey(auctionHouseType, listing.itemID, listing.count, saleValue,
 			listing.matchSeller or listing.seller, listing.auctionID), listing.auctionID)
+	return true
 end
 
-local function RecordFailure(listing)
+local function RecordFailure(scope, listing)
 	if not listing.resolutionKey then
 		return
 	end
-	RecordRealmObservation(listing.auctionHouseType, listing.itemID, listing.count, 0, 0,
+	local auctionHouseType = ResolveListingAuctionHouseType(scope, listing)
+	if not auctionHouseType then
+		return
+	end
+	RecordRealmObservation(auctionHouseType, listing.itemID, listing.count, 0, 0,
 		"failure", listing.resolutionKey, listing.resolutionKey)
 	RecordPersonalObservation(listing.itemID, listing.count, 0, 0,
 		"failure", listing.resolutionKey)
@@ -397,7 +423,9 @@ local function TrackNewListing(scope, listing)
 	listing.resolutionKey = NewResolutionKey()
 	listing.seller = playerFullName
 	listing.matchSeller = playerFullName
-	AddSaleLedgerEntry(scope, listing)
+	if not AddSaleLedgerEntry(scope, listing) then
+		return
+	end
 	inventoryAverageBuy:MoveOutOfInventory(listing.itemID, listing.count)
 	vendorFlipTracking:PreserveQuantity(listing.itemID, listing.count)
 end
@@ -471,8 +499,9 @@ local function ReadOwnedAuctionsClassic()
 				if match and not soldKeys[match.key] then
 					matches[#matches] = nil
 					soldKeys[match.key] = true
-					RecordSale(match.listing, bidAmount > 0 and bidAmount or buyout)
-					RemoveSaleLedgerEntry(scope, match.listing)
+					if RecordSale(scope, match.listing, bidAmount > 0 and bidAmount or buyout) then
+						RemoveSaleLedgerEntry(scope, match.listing)
+					end
 				end
 			elseif count and count > 0 then
 				local key = ListingKey(itemID, count, minBid, buyout)
@@ -521,7 +550,7 @@ local function ReadOwnedAuctionsClassic()
 	-- a failure now; a later seller invoice can still replace this exact observation.
 	for _, matches in pairs(previousByListing) do
 		for index = 1, #matches do
-			RecordFailure(matches[index])
+			RecordFailure(scope, matches[index])
 		end
 	end
 
@@ -572,8 +601,9 @@ local function ReadOwnedAuctionsModern()
 				if previousListing then
 					sold[auction.auctionID] = true
 					local unitPrice = unitBid > 0 and unitBid or unitBuyout
-					RecordSale(previousListing, unitPrice * count)
-					RemoveSaleLedgerEntry(scope, previousListing)
+					if RecordSale(scope, previousListing, unitPrice * count) then
+						RemoveSaleLedgerEntry(scope, previousListing)
+					end
 				end
 			else
 				if previousListing then
@@ -588,7 +618,7 @@ local function ReadOwnedAuctionsModern()
 
 	for auctionID, listing in pairs(previous) do
 		if not current[auctionID] and not sold[auctionID] then
-			RecordFailure(listing)
+			RecordFailure(scope, listing)
 		end
 	end
 	addon.db.char.ownedAuctions[scope] = current
@@ -882,12 +912,13 @@ local function CollectAuctionInvoice(invoice)
 		for index = #ledger, 1, -1 do
 			local listing = ledger[index]
 			if listing.name == invoice.itemName and listing.count == invoice.count and listing.buyout == invoice.buyout then
-				RecordSale(listing, saleValue, invoice.timestamp)
-				inventoryAverageBuy:RecordRemoval(listing.itemID, listing.count)
-				vendorFlipTracking:RecordSale(listing.itemID, listing.count,
-					saleValue - (invoice.consignment or 0))
-				tableRemove(ledger, index)
-				return
+				if RecordSale(scope, listing, saleValue, invoice.timestamp) then
+					inventoryAverageBuy:RecordRemoval(listing.itemID, listing.count)
+					vendorFlipTracking:RecordSale(listing.itemID, listing.count,
+						saleValue - (invoice.consignment or 0))
+					tableRemove(ledger, index)
+					return
+				end
 			end
 		end
 	end

@@ -15,12 +15,12 @@ local pairs = pairs
 local QueryAuctionItems = QueryAuctionItems
 local strsplit = strsplit
 local tonumber = tonumber
-local UnitFactionGroup = UnitFactionGroup
 local UnitGUID = UnitGUID
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
+local isWrath = addon.isWrath
+local playerFaction = addon.playerFaction
 local module = addon:NewModule("Scanner", "AceEvent-3.0")
-local isWrath = addon.IsWrath
 local auctionHouseUI = addon:GetModule("AuctionHouseUI")
 local dataProcessing
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
@@ -72,7 +72,6 @@ local auctioneerFactions = {
 
 local scanButton, auctionScope, scanScope, scanning, lastFullScan
 local UpdateScanButton
-local playerFaction = UnitFactionGroup("player")
 local FULL_SCAN_COOLDOWN = 15 * 60
 
 local function GetNPCID()

@@ -16,6 +16,7 @@ YAAHA exposes a deliberately small public API to other World of Warcraft addons 
 - [Versioning](#versioning)
 - [Item market data](#item-market-data)
   - [`GetItemData`](#getitemdata)
+  - [`IterateAuctionHouse`](#iterateauctionhouse)
   - [Item-data wrappers](#item-data-wrappers)
   - [`GetAuctionHouseStats`](#getauctionhousestats)
 - [Realm sale metrics](#realm-sale-metrics)
@@ -130,6 +131,21 @@ Returns `nil` when YAAHA has no public data for the item. Otherwise it returns a
 | `bimonthlyMarketValue` | `integer?` | Weighted rolling sixty-day market value. |
 
 `firstNonZeroMarketValue` checks the six market-value fields from current through sixty-day. Its source is the matching field name. Minimum bid and buyout are literal prices and are never market-value fallbacks.
+
+### `IterateAuctionHouse`
+
+```lua
+local iterator = YAAHA_API.IterateAuctionHouse(auctionHouseType)
+if iterator then
+    for itemID, data in iterator do
+        print(itemID, data.currentMarketValue)
+    end
+end
+```
+
+Returns an iterator over every item for which YAAHA has public data in the selected auction house. Each iteration returns the item ID and the same defensive `ItemData` snapshot returned by `GetItemData`. Results are ordered by ascending item ID and remain stable for the lifetime of that iterator, even if YAAHA processes a later scan or synchronization update.
+
+An invalid auction-house type returns `nil`. A valid auction house with no item data returns an iterator which yields no results. The iterator never exposes raw observations, private activity, or mutable internal tables.
 
 ### Item-data wrappers
 
@@ -271,7 +287,7 @@ local value = YAAHA_API.GetRecipeCraftingValue(
 
 `fullResults = true` returns a `CraftingResult`; otherwise the return is only its per-unit `value`. `currentCharacterOnly = true` restricts candidates to the logged-in character. When it is false or omitted, all recipes in the applicable faction-realm profession store may be considered.
 
-Both functions return `nil` when the recipe is unknown or any required material lacks a valid acquisition value. A tradeable reagent absent from the current market remains unavailable unless YAAHA knows another real vendor, conversion, or crafting path. Only soulbound or quest-bound materials may receive a final estimated fallback.
+Both functions return `nil` when the recipe is unknown or any required material lacks a valid acquisition value. A tradeable reagent absent from the current market remains unavailable unless YAAHA knows another real vendor, conversion, crafting, or authoritative derived-value path. Only soulbound or quest-bound materials may receive a final estimated fallback.
 
 ### Crafting results
 
@@ -313,6 +329,7 @@ Each crafting material contains:
 | `"vendor"` | A known unlimited-supply NPC price. |
 | `"convert"` | A known conversion or complete averaged conversion family was less expensive. |
 | `"crafting"` | A recorded recipe for the reagent was less expensive. |
+| `"derived"` | An authoritative item-specific method replaced YAAHA's default material-cost method and supplied the material's opportunity cost. |
 | `"soulboundFallback"` | A last-resort estimate for a soulbound or quest-bound reagent after real values failed. |
 
 A `CraftingConversion` contains the source material's `itemID`, the source `quantity` required for one requested unit, and `priceSource`. Conversion pricing currently uses the source material's `currentMarketValue`, so a present `priceSource` is `"currentMarketValue"`. When several interchangeable conversion paths exist, YAAHA averages their complete per-unit costs before comparing that family with other acquisition methods. Because no individual source represents the average, `conversion` is omitted for that material.

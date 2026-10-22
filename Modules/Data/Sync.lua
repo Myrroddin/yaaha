@@ -4,7 +4,6 @@
 local C_AutoComplete = C_AutoComplete
 local C_EncodingUtil = C_EncodingUtil
 local C_Timer = C_Timer
-local Enum = Enum
 local FACTION_ALLIANCE = FACTION_ALLIANCE
 local FACTION_HORDE = FACTION_HORDE
 local FACTION_NEUTRAL = FACTION_NEUTRAL
@@ -26,11 +25,10 @@ local stringLower = string.lower
 local tableConcat = table.concat
 local tableRemove = table.remove
 local type = type
-local UnitFactionGroup = UnitFactionGroup
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("Sync", "AceEvent-3.0")
-local usesSharedAuctionHouse = addon.UsesSharedAuctionHouse
+local usesSharedAuctionHouse = addon.usesSharedAuctionHouse
 local dataProcessing = addon:GetModule("DataProcessing")
 local collectorModules = {
 	disenchantData = addon:GetModule("DisenchantingData"),
@@ -45,13 +43,12 @@ local COMM_PREFIX = "YAAHA1"
 local PROTOCOL_VERSION = 1
 local SYNC_DISTRIBUTION = "GUILD"
 local INITIAL_PULL_DELAY = 60
-local SECONDS_PER_DAY = 24 * 60 * 60
+local SECONDS_PER_DAY = addon.secondsPerDay
 local MAX_HISTORY_SECONDS = 60 * SECONDS_PER_DAY
-local SALE_HISTORY_SECONDS = 60 * SECONDS_PER_DAY
-local playerFaction = UnitFactionGroup("player")
+local SALE_HISTORY_SECONDS = addon.saleHistorySeconds
 local playerFullName
-local BASE64_VARIANT = Enum.Base64Variant.StandardUrlSafe
-local oppositeFaction = playerFaction == "Alliance" and "Horde" or "Alliance"
+local BASE64_VARIANT = addon.base64Variant
+local COMPRESSION_METHOD = addon.compressionMethod
 -- Sync transports YAAHA's normalized data rather than Blizzard auction results.
 -- The wire key names the actual market. Faction-separated clients retain three
 -- markets, while Mists and Retail normalize every request to their shared house.
@@ -90,11 +87,11 @@ end
 local function GetScopeDB(auctionHouseType, create)
 	if usesSharedAuctionHouse and auctionHouseType == "Shared" then
 		return addon.db.realm, "realm"
-	elseif auctionHouseType == playerFaction then
+	elseif auctionHouseType == addon.playerFaction then
 		return addon.db.factionrealm, "factionrealm"
 	elseif auctionHouseType == "Neutral" then
 		return addon.db.realm, "realm"
-	elseif auctionHouseType == oppositeFaction then
+	elseif auctionHouseType == addon.oppositeFaction then
 		storage = storage or addon:GetModule("Storage")
 		local scopeDB = create and storage:GetOrCreateOppositeFactionData()
 			or storage:GetOppositeFactionData()
@@ -111,6 +108,14 @@ local function NormalizeRealmName(realm)
 		and stringLower(stringGsub(realm, "[%s%-%.]", "")) or nil
 end
 
+local function AddRealm(realms, realmSet, realm)
+	realm = NormalizeRealmName(realm)
+	if realm and not realmSet[realm] then
+		realmSet[realm] = true
+		realms[#realms + 1] = realm
+	end
+end
+
 -- Every member of a Connected Realm group sees the same auction house. Sorting
 -- the normalized current and connected realm names produces the same wire key
 -- from any realm in that group without maintaining a static realm database.
@@ -120,19 +125,12 @@ local function GetConnectedRealmKey()
 	end
 	local realmSet = {}
 	local realms = {}
-	local function AddRealm(realm)
-		realm = NormalizeRealmName(realm)
-		if realm and not realmSet[realm] then
-			realmSet[realm] = true
-			realms[#realms + 1] = realm
-		end
-	end
 
-	AddRealm(GetNormalizedRealmName())
+	AddRealm(realms, realmSet, GetNormalizedRealmName())
 	local succeeded, connectedRealms = pcall(C_AutoComplete.GetAutoCompleteRealms)
 	if succeeded and type(connectedRealms) == "table" then
 		for index = 1, #connectedRealms do
-			AddRealm(connectedRealms[index])
+			AddRealm(realms, realmSet, connectedRealms[index])
 		end
 	end
 	if #realms == 0 then
@@ -156,7 +154,7 @@ local function EncodePacket(kind, data)
 	})
 	-- Compressed output is binary. Base64 makes it safe for WoW's addon channel;
 	-- no raw table or serialized text is ever handed to AceComm.
-	local compressed = C_EncodingUtil.CompressString(serialized)
+	local compressed = C_EncodingUtil.CompressString(serialized, COMPRESSION_METHOD)
 	return C_EncodingUtil.EncodeBase64(compressed, BASE64_VARIANT)
 end
 
@@ -167,7 +165,7 @@ local function DecodePacket(text)
 	-- Reverse the channel-safe encoding and compression before deserializing.
 	-- OnCommReceived protects this entire path because peer data is untrusted.
 	local decoded = C_EncodingUtil.DecodeBase64(text, BASE64_VARIANT)
-	local decompressed = C_EncodingUtil.DecompressString(decoded)
+	local decompressed = C_EncodingUtil.DecompressString(decoded, COMPRESSION_METHOD)
 	local success, packet = addon:Deserialize(decompressed)
 	if success and type(packet) == "table" and packet.version == PROTOCOL_VERSION
 		and packet.realmGroup == GetConnectedRealmKey()

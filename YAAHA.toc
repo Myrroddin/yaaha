@@ -80,12 +80,12 @@ Data\Collectors\ProspectingCollector.lua [AllowLoadGameType tbc, wrath, mists, s
 Data\Convert\CreateConvertDataModule.lua
 Data\Convert\LoadConvertDataModule-Classic.lua [AllowLoadGameType classic, camelot] [ExcludeLoadGameType mists]
 Data\Convert\LoadConvertDataModule-Modern.lua [AllowLoadGameType standard, mists]
+Data\DerivedMaterial\DerivedMaterialData.lua
 Data\Disenchanting\DisenchantingData.lua
 Data\Enchanting\EnchantingCraftData-Classic.lua [AllowLoadGameType classic, camelot] [ExcludeLoadGameType mists]
 Data\Enchanting\EnchantingCraftData-Modern.lua [AllowLoadGameType standard, mists]
 Data\Enchanting\EnchantingScrollData.lua [AllowLoadGameType wrath, mists]
 Data\MaterialBreakdown\MaterialBreakdownData.lua [AllowLoadGameType tbc, wrath, mists, standard]
-Data\MaterialValuation\MaterialValuation-Standard.lua [AllowLoadGameType standard]
 Data\Milling\MillingData-Classic.lua [AllowLoadGameType wrath]
 Data\Milling\MillingData-Modern.lua [AllowLoadGameType standard, mists]
 Data\Prospecting\ProspectingData-Classic.lua [AllowLoadGameType tbc, wrath]

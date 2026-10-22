@@ -9,11 +9,11 @@ local LibStub = LibStub
 local max = math.max
 local pairs = pairs
 local select = select
+local setmetatable = setmetatable
 local sort = table.sort
 local time = time
 local type = type
 
-local ALCHEMY_SKILL_LINE = 171
 local ALCHEMY_MASTERY_BONUS = 1.2
 local LEGION_BFA_RANK_THREE_BONUS = 1.4
 local BFA_EXPANSION = 7
@@ -32,11 +32,16 @@ local ITEM_BIND_QUEST = Enum.ItemBind.Quest
 local COPPER_PER_GOLD = 10000
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
+local isClassicEra = addon.isClassicEra
+local isForever = addon.isForever
+local isMists = addon.isMists
+local isStandard = addon.isStandard
+local ALCHEMY_SKILL_LINE = addon.alchemySkillLineID
 local module = addon:NewModule("ProfessionScanner", "AceEvent-3.0")
-local supportsAlchemyMastery = not addon.IsClassicEra and not addon.IsForever
-local usesUniversalVellum = addon.IsStandard or addon.IsMists
+local supportsAlchemyMastery = not isClassicEra and not isForever
+local usesUniversalVellum = isStandard or isMists
 local convertData = addon:GetModule("ConvertData")
-local materialValuationData = addon:GetModule("MaterialValuationData", true)
+local derivedMaterialData = addon:GetModule("DerivedMaterialData")
 -- Wrath and Mists load spell-to-scroll mappings; modern recipe APIs provide
 -- their own output items.
 local enchantingScrollData = addon:GetModule("EnchantingScrollData", true)
@@ -311,300 +316,317 @@ local function BuildRecipeIndex(currentCharacterOnly, outputItemID)
 	return recipesBySpell, recipesByOutput
 end
 
-local function Calculate(auctionDB, currentCharacterOnly, outputItemID, allowAlchemySpecialization)
-	local recipesBySpell, recipesByOutput = BuildRecipeIndex(currentCharacterOnly, outputItemID)
-	local itemCache = {}
-	local recipeCache = {}
-	local visitingItems = {}
-	local visitingRecipes = {}
-	local GetItemCost, GetRecipeCost
+local function GetMaterialMarketValue(auctionDB, itemID)
+	local data = auctionDB and auctionDB[itemID]
+	local value = addon:GetCurrentMarketValue(data)
+	if value then
+		return value, MATERIAL_MARKET_VALUE_FIELD
+	end
+end
 
-	local function GetMaterialMarketValue(itemID)
-		local data = auctionDB and auctionDB[itemID]
-		local value = addon:GetCurrentMarketValue(data)
-		if value then
-			return value, MATERIAL_MARKET_VALUE_FIELD
+local function GetSoulboundFallback(itemID)
+	local itemName, _, _, _, _, _, _, _, _, _, sellPrice, _, _, bindType, expansionID = C_Item.GetItemInfo(itemID)
+	if not itemName then
+		C_Item.RequestLoadItemDataByID(itemID)
+		return
+	end
+	if bindType ~= ITEM_BIND_ON_ACQUIRE and bindType ~= ITEM_BIND_QUEST then
+		return
+	end
+	local expansionLevel = max((expansionID or 0) + 1, 1)
+	return max(sellPrice or 0, expansionLevel * COPPER_PER_GOLD)
+end
+
+local function HasFreshRecipe(entries)
+	for index = 1, #entries do
+		if not entries[index].stale then
+			return true
 		end
 	end
+	return false
+end
 
-	local function GetSoulboundFallback(itemID)
-		local itemName, _, _, _, _, _, _, _, _, _, sellPrice, _, _, bindType, expansionID = C_Item.GetItemInfo(itemID)
-		if not itemName then
-			C_Item.RequestLoadItemDataByID(itemID)
-			return
-		end
-		if bindType ~= ITEM_BIND_ON_ACQUIRE and bindType ~= ITEM_BIND_QUEST then
-			return
-		end
-		local expansionLevel = max((expansionID or 0) + 1, 1)
-		return max(sellPrice or 0, expansionLevel * COPPER_PER_GOLD)
+local function Consider(best, value, source, detail)
+	-- TSM-style material prices are whole copper before the minimum source is
+	-- selected. This matters for per-unit conversions such as one greater
+	-- essence becoming three lesser essences.
+	value = addon:RoundMoney(value)
+	if value and value > 0 and (not best or value < best.value) then
+		return { value = value, source = source, detail = detail }
 	end
+	return best
+end
 
-	local function HasFreshRecipe(entries)
-		for index = 1, #entries do
-			if not entries[index].stale then
-				return true
-			end
-		end
+local function AddMaterial(materials, material, itemID, quantity)
+	local entry = {
+		itemID = itemID,
+		quantity = quantity,
+	}
+	local subtotal
+	if material then
+		subtotal = material.value * quantity
+		entry.unitValue = material.value
+		entry.totalValue = subtotal
+		entry.source = material.source
+		entry.detail = material.detail
+	end
+	materials[#materials + 1] = entry
+	return subtotal
+end
+
+local function IsBetterResult(result, best)
+	if not best then
+		return true
+	elseif not result.value then
 		return false
+	elseif not best.value then
+		return true
 	end
+	return result.value < best.value or result.value == best.value
+		and result.expectedOutputMultiplier > best.expectedOutputMultiplier
+end
 
-	local function Consider(best, value, source, detail)
-		-- TSM-style material prices are whole copper before the minimum source is
-		-- selected. This matters for per-unit conversions such as one greater
-		-- essence becoming three lesser essences.
-		value = addon:RoundMoney(value)
-		if value and value > 0 and (not best or value < best.value) then
-			return { value = value, source = source, detail = detail }
-		end
-		return best
+local function SortMaterials(left, right)
+	return left.itemID < right.itemID
+end
+
+local Calculator = {}
+Calculator.__index = Calculator
+
+function Calculator:GetRecipeCost(entry)
+	local cached = self.recipeCache[entry]
+	if cached ~= nil then
+		return cached or nil
 	end
-
-	local function AddMaterial(materials, material, itemID, quantity)
-		local entry = {
-			itemID = itemID,
-			quantity = quantity,
-		}
-		local subtotal
-		if material then
-			subtotal = material.value * quantity
-			entry.unitValue = material.value
-			entry.totalValue = subtotal
-			entry.source = material.source
-			entry.detail = material.detail
-		end
-		materials[#materials + 1] = entry
-		return subtotal
+	if self.visitingRecipes[entry] then
+		return
 	end
+	self.visitingRecipes[entry] = true
+	local total = 0
+	local materials = {}
+	local complete = true
 
-	local function IsBetterResult(result, best)
-		if not best then
-			return true
-		elseif not result.value then
-			return false
-		elseif not best.value then
-			return true
-		end
-		return result.value < best.value or result.value == best.value
-			and result.expectedOutputMultiplier > best.expectedOutputMultiplier
-	end
-
-	function GetRecipeCost(entry)
-		local cached = recipeCache[entry]
-		if cached ~= nil then
-			return cached or nil
-		end
-		if visitingRecipes[entry] then
-			return
-		end
-		visitingRecipes[entry] = true
-		local total = 0
-		local materials = {}
-		local complete = true
-
-		if entry.recipe.reagentSlots then
-			for _, slot in ipairs(entry.recipe.reagentSlots) do
-				local cheapest, cheapestItemID, cheapestQuantity, cheapestTotal
-				for _, candidate in ipairs(slot.items or {}) do
-					local material = GetItemCost(candidate.itemID)
-					local quantity = candidate.quantity or slot.quantity or 1
-					local candidateTotal = material and quantity and material.value * quantity
-					if candidateTotal and (not cheapestTotal or candidateTotal < cheapestTotal) then
-						cheapest = material
-						cheapestItemID = candidate.itemID
-						cheapestQuantity = quantity
-						cheapestTotal = candidateTotal
-					end
-				end
-				if cheapest then
-					total = total + AddMaterial(materials, cheapest, cheapestItemID, cheapestQuantity)
-				else
-					local candidate = slot.items and slot.items[1]
-					if candidate then
-						AddMaterial(materials, nil, candidate.itemID,
-							candidate.quantity or slot.quantity or 1)
-					end
-					complete = false
-				end
-			end
-		else
-			for itemID, quantity in pairs(entry.recipe.reagents or {}) do
-				local material = GetItemCost(itemID)
-				local subtotal = AddMaterial(materials, material, itemID, quantity)
-				if subtotal then
-					total = total + subtotal
-				else
-					complete = false
-				end
-			end
-		end
-
-		local vellumItemIDs
-		if enchantingScrollData then
-			vellumItemIDs = select(2, enchantingScrollData:GetEnchant(entry.spellID))
-		end
-		if not vellumItemIDs and usesUniversalVellum
-			and entry.recipe.isEnchant then
-			vellumItemIDs = {ENCHANTING_VELLUM_ITEM_ID}
-		end
-		if vellumItemIDs then
-			for _, itemID in ipairs(vellumItemIDs) do
-				if RecipeHasReagent(entry.recipe, itemID) then
-					vellumItemIDs = nil
-					break
-				end
-			end
-		end
-		if vellumItemIDs then
-			local cheapest, cheapestItemID
-			for _, itemID in ipairs(vellumItemIDs) do
-				local material = GetItemCost(itemID)
-				if material and (not cheapest or material.value < cheapest.value) then
+	if entry.recipe.reagentSlots then
+		for _, slot in ipairs(entry.recipe.reagentSlots) do
+			local cheapest, cheapestItemID, cheapestQuantity, cheapestTotal
+			for _, candidate in ipairs(slot.items or {}) do
+				local material = self:GetItemCost(candidate.itemID)
+				local quantity = candidate.quantity or slot.quantity or 1
+				local candidateTotal = material and quantity and material.value * quantity
+				if candidateTotal and (not cheapestTotal or candidateTotal < cheapestTotal) then
 					cheapest = material
-					cheapestItemID = itemID
+					cheapestItemID = candidate.itemID
+					cheapestQuantity = quantity
+					cheapestTotal = candidateTotal
 				end
 			end
 			if cheapest then
-				total = total + AddMaterial(materials, cheapest, cheapestItemID, 1)
+				total = total + AddMaterial(materials, cheapest, cheapestItemID, cheapestQuantity)
 			else
-				AddMaterial(materials, nil, vellumItemIDs[1], 1)
+				local candidate = slot.items and slot.items[1]
+				if candidate then
+					AddMaterial(materials, nil, candidate.itemID,
+						candidate.quantity or slot.quantity or 1)
+				end
 				complete = false
 			end
 		end
+	else
+		for itemID, quantity in pairs(entry.recipe.reagents or {}) do
+			local material = self:GetItemCost(itemID)
+			local subtotal = AddMaterial(materials, material, itemID, quantity)
+			if subtotal then
+				total = total + subtotal
+			else
+				complete = false
+			end
+		end
+	end
 
-		sort(materials, function(left, right)
-			return left.itemID < right.itemID
-		end)
-		visitingRecipes[entry] = nil
-		local minMade = entry.recipe.minMade or 1
-		local maxMade = entry.recipe.maxMade or minMade
-		local outputQuantity = (minMade + maxMade) / 2
-		local result = {
-			-- Expected extra output affects finished-item return, never reagent
-			-- requirements or baseline crafting cost.
-			value = complete and addon:RoundMoney(total / outputQuantity) or nil,
-			totalReagentValue = complete and total or nil,
-			outputQuantity = outputQuantity,
-			character = entry.character,
-			profession = entry.profession,
-			skillLineID = entry.skillLineID,
-			expectedOutputMultiplier = GetExpectedOutputMultiplier(entry, allowAlchemySpecialization),
-			stale = entry.stale,
-			spellID = entry.spellID,
-			outputItemID = entry.recipe.outputItemID or (entry.recipe.outputItemIDs and entry.recipe.outputItemIDs[1]),
-			name = entry.recipe.name,
-			materials = materials,
-		}
-		recipeCache[entry] = result
+	local vellumItemIDs
+	if enchantingScrollData then
+		vellumItemIDs = select(2, enchantingScrollData:GetEnchant(entry.spellID))
+	end
+	if not vellumItemIDs and usesUniversalVellum
+		and entry.recipe.isEnchant then
+		vellumItemIDs = {ENCHANTING_VELLUM_ITEM_ID}
+	end
+	if vellumItemIDs then
+		for _, itemID in ipairs(vellumItemIDs) do
+			if RecipeHasReagent(entry.recipe, itemID) then
+				vellumItemIDs = nil
+				break
+			end
+		end
+	end
+	if vellumItemIDs then
+		local cheapest, cheapestItemID
+		for _, itemID in ipairs(vellumItemIDs) do
+			local material = self:GetItemCost(itemID)
+			if material and (not cheapest or material.value < cheapest.value) then
+				cheapest = material
+				cheapestItemID = itemID
+			end
+		end
+		if cheapest then
+			total = total + AddMaterial(materials, cheapest, cheapestItemID, 1)
+		else
+			AddMaterial(materials, nil, vellumItemIDs[1], 1)
+			complete = false
+		end
+	end
+
+	sort(materials, SortMaterials)
+	self.visitingRecipes[entry] = nil
+	local minMade = entry.recipe.minMade or 1
+	local maxMade = entry.recipe.maxMade or minMade
+	local outputQuantity = (minMade + maxMade) / 2
+	local result = {
+		-- Expected extra output affects finished-item return, never reagent
+		-- requirements or baseline crafting cost.
+		value = complete and addon:RoundMoney(total / outputQuantity) or nil,
+		totalReagentValue = complete and total or nil,
+		outputQuantity = outputQuantity,
+		character = entry.character,
+		profession = entry.profession,
+		skillLineID = entry.skillLineID,
+		expectedOutputMultiplier = GetExpectedOutputMultiplier(entry, self.allowAlchemySpecialization),
+		stale = entry.stale,
+		spellID = entry.spellID,
+		outputItemID = entry.recipe.outputItemID or (entry.recipe.outputItemIDs and entry.recipe.outputItemIDs[1]),
+		name = entry.recipe.name,
+		materials = materials,
+	}
+	self.recipeCache[entry] = result
+	return result
+end
+
+function Calculator:GetCurrentMarketValue(itemID)
+	return GetMaterialMarketValue(self.auctionDB, itemID)
+end
+
+function Calculator:GetItemCost(itemID)
+	local cached = self.itemCache[itemID]
+	if cached ~= nil then
+		return cached or nil
+	end
+	if self.visitingItems[itemID] then
+		return
+	end
+	self.visitingItems[itemID] = true
+	local hasDerivedMethod = derivedMaterialData:HasMethod(itemID)
+	if hasDerivedMethod then
+		-- Like a TSM per-material custom value, a registered method replaces the
+		-- default material-cost method in full. Never fall through to market,
+		-- vendor, recipe, conversion, or soulbound-fallback candidates.
+		local valuation = derivedMaterialData:GetValue(itemID, self)
+		local result = Consider(nil, valuation and valuation.value, "derived", valuation)
+		self.visitingItems[itemID] = nil
+		self.itemCache[itemID] = result or false
 		return result
 	end
 
-	function GetItemCost(itemID)
-		local cached = itemCache[itemID]
-		if cached ~= nil then
-			return cached or nil
-		end
-		if visitingItems[itemID] then
-			return
-		end
-		visitingItems[itemID] = true
-		-- A known unlimited NPC supply is dependable and authoritative. Auction
-		-- listings do not guarantee the same availability and must not undercut it.
-		local best = Consider(nil, addon.db.global.vendorBuyPrices[itemID], "vendor")
-		if not best then
-			local marketValue, marketSource = GetMaterialMarketValue(itemID)
-			best = Consider(best, marketValue, "market", marketSource)
+	-- A known unlimited NPC supply is dependable and authoritative. Auction
+	-- listings do not guarantee the same availability and must not undercut it.
+	local best = Consider(nil, addon.db.global.vendorBuyPrices[itemID], "vendor")
+	if not best then
+		local marketValue, marketSource = GetMaterialMarketValue(self.auctionDB, itemID)
+		best = Consider(best, marketValue, "market", marketSource)
 
-			-- Conversion prices deliberately use the source material's current market
-			-- value, keeping conversion and crafting as independent minimum candidates.
-			local conversions = convertData:GetConversions(itemID)
-			if conversions then
-				local conversionTotal = 0
-				local conversionCount = 0
-				local conversionDetail
-				for sourceItemID, quantity in pairs(conversions) do
-					local sourceValue, sourceField = GetMaterialMarketValue(sourceItemID)
-					if sourceValue then
-						local pathValue = addon:RoundMoney(sourceValue * quantity)
-						conversionTotal = conversionTotal + pathValue
-						conversionCount = conversionCount + 1
-						conversionDetail = {
-							itemID = sourceItemID,
-							quantity = quantity,
-							priceSource = sourceField,
-						}
-					end
-				end
-				if conversionCount > 0 then
-					-- Average interchangeable conversion paths first, then compare that
-					-- stable candidate with the broader material-acquisition methods.
-					best = Consider(best, conversionTotal / conversionCount, "convert",
-						conversionCount == 1 and conversionDetail or nil)
+		-- Conversion prices deliberately use the source material's current market
+		-- value, keeping conversion and crafting as independent minimum candidates.
+		local conversions = convertData:GetConversions(itemID)
+		if conversions then
+			local conversionTotal = 0
+			local conversionCount = 0
+			local conversionDetail
+			for sourceItemID, quantity in pairs(conversions) do
+				local sourceValue, sourceField = GetMaterialMarketValue(self.auctionDB, sourceItemID)
+				if sourceValue then
+					local pathValue = addon:RoundMoney(sourceValue * quantity)
+					conversionTotal = conversionTotal + pathValue
+					conversionCount = conversionCount + 1
+					conversionDetail = {
+						itemID = sourceItemID,
+						quantity = quantity,
+						priceSource = sourceField,
+					}
 				end
 			end
-
-			local outputRecipes = recipesByOutput[itemID] or {}
-			local hasFreshRecipe = HasFreshRecipe(outputRecipes)
-			for index = 1, #outputRecipes do
-				local entry = outputRecipes[index]
-				if not hasFreshRecipe or not entry.stale then
-					local recipe = GetRecipeCost(entry)
-					best = Consider(best, recipe and recipe.value, "crafting", recipe)
-				end
-			end
-
-			if materialValuationData then
-				local valuation = materialValuationData:GetValue(itemID, GetItemCost)
-				best = Consider(best, valuation and valuation.value, "convert")
+			if conversionCount > 0 then
+				-- Average interchangeable conversion paths first, then compare that
+				-- stable candidate with the broader material-acquisition methods.
+				best = Consider(best, conversionTotal / conversionCount, "convert",
+					conversionCount == 1 and conversionDetail or nil)
 			end
 		end
-		-- A vendor-sell estimate is deliberately limited to soulbound reagents and
-		-- is used only after every real acquisition or opportunity cost has failed.
-		-- A tradeable material stays unknown only when its market, vendor, conversion,
-		-- and recursively known crafting paths are all unavailable.
-		if not best then
-			best = Consider(best, GetSoulboundFallback(itemID), "soulboundFallback")
+
+		local outputRecipes = self.recipesByOutput[itemID] or {}
+		local hasFreshRecipe = HasFreshRecipe(outputRecipes)
+		for index = 1, #outputRecipes do
+			local entry = outputRecipes[index]
+			if not hasFreshRecipe or not entry.stale then
+				local recipe = self:GetRecipeCost(entry)
+				best = Consider(best, recipe and recipe.value, "crafting", recipe)
+			end
 		end
-		visitingItems[itemID] = nil
-		itemCache[itemID] = best or false
-		return best
 	end
+	-- A vendor-sell estimate is deliberately limited to soulbound reagents and
+	-- is used only after every real acquisition or opportunity cost has failed.
+	-- A tradeable material stays unknown only when its market, vendor, conversion,
+	-- and recursively known crafting paths are all unavailable.
+	if not best then
+		best = Consider(best, GetSoulboundFallback(itemID), "soulboundFallback")
+	end
+	self.visitingItems[itemID] = nil
+	self.itemCache[itemID] = best or false
+	return best
+end
 
-	return {
-		GetItem = function(_, itemID)
-			return GetItemCost(itemID)
-		end,
-		GetRecipe = function(_, spellID)
-			local entries = recipesBySpell[spellID] or {}
-			local hasFreshRecipe = HasFreshRecipe(entries)
-			local best
-			for index = 1, #entries do
-				local entry = entries[index]
-				if not hasFreshRecipe or not entry.stale then
-					local result = GetRecipeCost(entry)
-					if result and IsBetterResult(result, best) then
-						best = result
-					end
-				end
+function Calculator:GetRecipe(spellID)
+	local entries = self.recipesBySpell[spellID] or {}
+	local hasFreshRecipe = HasFreshRecipe(entries)
+	local best
+	for index = 1, #entries do
+		local entry = entries[index]
+		if not hasFreshRecipe or not entry.stale then
+			local result = self:GetRecipeCost(entry)
+			if result and IsBetterResult(result, best) then
+				best = result
 			end
-			return best
-		end,
-		GetRecipesForItem = function(_, itemID)
-			local results = {}
-			local outputRecipes = recipesByOutput[itemID] or {}
-			local hasFreshRecipe = HasFreshRecipe(outputRecipes)
-			for index = 1, #outputRecipes do
-				local entry = outputRecipes[index]
-				if not hasFreshRecipe or not entry.stale then
-					local result = GetRecipeCost(entry)
-					if result then
-						results[#results + 1] = result
-					end
-				end
+		end
+	end
+	return best
+end
+
+function Calculator:GetRecipesForItem(itemID)
+	local results = {}
+	local outputRecipes = self.recipesByOutput[itemID] or {}
+	local hasFreshRecipe = HasFreshRecipe(outputRecipes)
+	for index = 1, #outputRecipes do
+		local entry = outputRecipes[index]
+		if not hasFreshRecipe or not entry.stale then
+			local result = self:GetRecipeCost(entry)
+			if result then
+				results[#results + 1] = result
 			end
-			return results
-		end,
-	}
+		end
+	end
+	return results
+end
+
+local function Calculate(auctionDB, currentCharacterOnly, outputItemID, allowAlchemySpecialization)
+	local recipesBySpell, recipesByOutput = BuildRecipeIndex(currentCharacterOnly, outputItemID)
+	return setmetatable({
+		auctionDB = auctionDB,
+		allowAlchemySpecialization = allowAlchemySpecialization,
+		itemCache = {},
+		recipeCache = {},
+		recipesByOutput = recipesByOutput,
+		recipesBySpell = recipesBySpell,
+		visitingItems = {},
+		visitingRecipes = {},
+	}, Calculator)
 end
 
 function module:GetCharacterName()
@@ -664,5 +686,5 @@ function module:GetRecipeCrafting(spellID, auctionDB, currentCharacterOnly, allo
 end
 
 function module:GetMaterialCost(itemID, auctionDB, currentCharacterOnly, allowAlchemySpecialization)
-	return Calculate(auctionDB, currentCharacterOnly, nil, allowAlchemySpecialization):GetItem(itemID)
+	return Calculate(auctionDB, currentCharacterOnly, nil, allowAlchemySpecialization):GetItemCost(itemID)
 end

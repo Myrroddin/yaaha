@@ -13,6 +13,12 @@ local tonumber = tonumber
 local type = type
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
+local isClassicEra = addon.isClassicEra
+local isForever = addon.isForever
+local isMists = addon.isMists
+local isStandard = addon.isStandard
+local isTBC = addon.isTBC
+local isWrath = addon.isWrath
 local module = addon:NewModule("DisenchantingData")
 
 local ARMOR = 4
@@ -23,6 +29,11 @@ local EPIC = 4
 -- The client-appropriate static probabilities act as 100 virtual observations.
 -- This keeps one lucky result from dominating while learned results accumulate.
 local STATIC_SAMPLE_WEIGHT = 100
+
+local function SortResults(left, right)
+	return left.chance > right.chance
+		or left.chance == right.chance and left.itemID < right.itemID
+end
 
 local data = {
 	[WEAPON] = { [UNCOMMON] = {}, [RARE] = {}, [EPIC] = {} },
@@ -88,7 +99,7 @@ nonDisenchantable[20407] = true -- Twilight Cultist Robe
 nonDisenchantable[20408] = true -- Twilight Cultist Cowl
 
 -- Add items introduced in The Burning Crusade.
-if addon.IsTBC or addon.IsWrath then
+if isTBC or isWrath then
 	nonDisenchantable[20897] = true -- Lookout's Tunic
 	nonDisenchantable[20901] = true -- Warder's Shirt
 	nonDisenchantable[21766] = true -- Opal Necklace of Impact
@@ -100,7 +111,7 @@ if addon.IsTBC or addon.IsWrath then
 end
 
 -- Add items introduced in Wrath of the Lich King.
-if addon.IsWrath then
+if isWrath then
 	nonDisenchantable[41248] = true -- Red Lumberjack Shirt
 	nonDisenchantable[41249] = true -- Blue Lumberjack Shirt
 	nonDisenchantable[41250] = true -- Green Lumberjack Shirt
@@ -224,9 +235,9 @@ local function AddStandardNonDisenchantable()
 	end
 end
 
-if addon.IsMists or addon.IsStandard then
+if isMists or isStandard then
 	AddMistsNonDisenchantable()
-	if addon.IsStandard then
+	if isStandard then
 		AddStandardNonDisenchantable()
 	end
 end
@@ -309,15 +320,15 @@ local function AddVanillaRanges()
 	AddSharedRange(EPIC, 56, 94, 200, { Result(20725, 1, 1, 2, 1.666) })
 end
 
-if addon.IsForever then
+if isForever then
 	-- Forever starts from a private copy of the Vanilla ranges. Apply only
 	-- confirmed Forever additions, replacements, or removals after this call.
 	AddVanillaRanges()
-elseif addon.IsClassicEra or addon.IsTBC or addon.IsWrath then
+elseif isClassicEra or isTBC or isWrath then
 	AddVanillaRanges()
 end
 
-if addon.IsTBC or addon.IsWrath then
+if isTBC or isWrath then
 	AddUncommonRange(66, 79, 225, { 22445, 0.75, 1, 3, 1.50 }, { 22447, 0.22, 1, 3, 0.44 }, { 22448, 0.03, 1, 1, 0.03 })
 	AddUncommonRange(80, 99, 225, { 22445, 0.75, 2, 3, 1.875 }, { 22447, 0.22, 2, 3, 0.55 }, { 22448, 0.03, 1, 1, 0.03 })
 	AddUncommonRange(100, 120, 275, { 22445, 0.75, 2, 5, 2.625 }, { 22446, 0.22, 1, 2, 0.33 }, { 22449, 0.03, 1, 1, 0.03 })
@@ -326,7 +337,7 @@ if addon.IsTBC or addon.IsWrath then
 	AddSharedRange(EPIC, 95, 164, 300, { Result(22450, 1, 1, 2, 1.666) })
 end
 
-if addon.IsWrath then
+if isWrath then
 	-- These Wrath breakpoints form a stable prior which actual disenchants refine.
 	-- AddUncommonRange swaps the dust and essence chances for weapons while keeping
 	-- armor at the supplied 75% dust and 22% essence distribution.
@@ -517,9 +528,7 @@ function module:GetResults(itemInfo)
 		end
 	end
 
-	sort(results, function(left, right)
-		return left.chance > right.chance or left.chance == right.chance and left.itemID < right.itemID
-	end)
+	sort(results, SortResults)
 	return {
 		itemID = itemID,
 		classID = classID,

@@ -5,7 +5,10 @@ local abs = math.abs
 local COPPER_AMOUNT_SYMBOL = COPPER_AMOUNT_SYMBOL
 local COPPER_AMOUNT_TEXTURE = COPPER_AMOUNT_TEXTURE
 local DECIMAL_SEPERATOR = DECIMAL_SEPERATOR or "."
+local Enum = Enum
 local floor = math.floor
+local FACTION_ALLIANCE = FACTION_ALLIANCE
+local FACTION_HORDE = FACTION_HORDE
 local format = string.format
 local FormatLargeNumber = FormatLargeNumber
 local GetNormalizedRealmName = GetNormalizedRealmName
@@ -19,8 +22,10 @@ local LE_GAME_ERR_ITEM_MAX_COUNT = LE_GAME_ERR_ITEM_MAX_COUNT
 local LE_GAME_ERR_ITEM_NOT_FOUND = LE_GAME_ERR_ITEM_NOT_FOUND
 local LE_GAME_ERR_NOT_ENOUGH_MONEY = LE_GAME_ERR_NOT_ENOUGH_MONEY
 local LibStub = LibStub
+local IsPlayerNeutral = IsPlayerNeutral
 local NameUtil = NameUtil
 local random = math.random
+local rawset = rawset
 local SILVER_AMOUNT_SYMBOL = SILVER_AMOUNT_SYMBOL
 local SILVER_AMOUNT_TEXTURE = SILVER_AMOUNT_TEXTURE
 local stringMatch = string.match
@@ -37,24 +42,49 @@ local WOW_PROJECT_MAINLINE = WOW_PROJECT_MAINLINE
 local WOW_PROJECT_MISTS_CLASSIC = WOW_PROJECT_MISTS_CLASSIC
 local WOW_PROJECT_WRATH_CLASSIC = WOW_PROJECT_WRATH_CLASSIC
 
----@class YAAHA: AceAddon, AceComm-3.0, AceConsole-3.0, AceSerializer-3.0, LibAboutPanel-2.0
+---@class YAAHA: AceAddon, AceComm-3.0, AceConsole-3.0, AceEvent-3.0, AceSerializer-3.0, LibAboutPanel-2.0
 ---@field db AceDBObject-3.0!
 ---@field FireAPIEvent fun(self: YAAHA, event: string, ...)
 ---@field GetOptions fun(self: YAAHA): table
 ---@field GetSyncSourceID fun(self: YAAHA): string
-local addon = LibStub("AceAddon-3.0"):NewAddon("YAAHA", "AceComm-3.0", "AceConsole-3.0", "AceSerializer-3.0", "LibAboutPanel-2.0")
+---@field localizedPlayerFaction string
+---@field oppositeFaction? "Alliance"|"Horde"
+---@field oppositeFactionName? string
+---@field playerFaction "Alliance"|"Horde"|"Neutral"
+local addon = LibStub("AceAddon-3.0"):NewAddon("YAAHA", "AceComm-3.0", "AceConsole-3.0", "AceEvent-3.0", "AceSerializer-3.0", "LibAboutPanel-2.0")
 
-addon.IsClassicEra = WOW_PROJECT_ID == WOW_PROJECT_CLASSIC
-addon.IsTBC = WOW_PROJECT_ID == WOW_PROJECT_BURNING_CRUSADE_CLASSIC
-addon.IsWrath = WOW_PROJECT_ID == WOW_PROJECT_WRATH_CLASSIC
-addon.IsMists = WOW_PROJECT_ID == WOW_PROJECT_MISTS_CLASSIC
-addon.IsForever = WOW_PROJECT_ID == WOW_PROJECT_CAMELOT
-addon.IsStandard = WOW_PROJECT_ID == WOW_PROJECT_MAINLINE
-addon.UsesSharedAuctionHouse = addon.IsStandard or addon.IsMists
-addon.AuctionHouseMinimumPrice = addon.UsesSharedAuctionHouse and 100 or 1
+addon.isClassicEra = WOW_PROJECT_ID == WOW_PROJECT_CLASSIC
+addon.isTBC = WOW_PROJECT_ID == WOW_PROJECT_BURNING_CRUSADE_CLASSIC
+addon.isWrath = WOW_PROJECT_ID == WOW_PROJECT_WRATH_CLASSIC
+addon.isMists = WOW_PROJECT_ID == WOW_PROJECT_MISTS_CLASSIC
+addon.isForever = WOW_PROJECT_ID == WOW_PROJECT_CAMELOT
+addon.isStandard = WOW_PROJECT_ID == WOW_PROJECT_MAINLINE
+local isForever = addon.isForever
+local isMists = addon.isMists
+local isStandard = addon.isStandard
+addon.usesSharedAuctionHouse = isStandard or isMists
+addon.auctionHouseMinimumPrice = addon.usesSharedAuctionHouse and 100 or 1
+addon.alchemySkillLineID = 171
+addon.base64Variant = Enum.Base64Variant.StandardUrlSafe
+addon.compressionMethod = Enum.CompressionMethod.Zlib
+addon.marketHistoryDays = 60
+addon.negativeNumberColor = "|cffff2020"
+addon.positiveNumberColor = "|cff20ff20"
+addon.secondsPerDay = 24 * 60 * 60
+addon.saleHistoryDays = 60
+addon.saleHistorySeconds = addon.saleHistoryDays * addon.secondsPerDay
 
-local isForever = addon.IsForever
-local usesSharedAuctionHouse = addon.UsesSharedAuctionHouse
+function addon:RefreshPlayerFaction()
+	self.playerFaction, self.localizedPlayerFaction = UnitFactionGroup("player")
+	self.oppositeFaction = self.playerFaction == "Alliance" and "Horde"
+		or self.playerFaction == "Horde" and "Alliance" or nil
+	self.oppositeFactionName = self.oppositeFaction == "Alliance" and FACTION_ALLIANCE
+		or self.oppositeFaction == "Horde" and FACTION_HORDE or nil
+end
+
+addon:RefreshPlayerFaction()
+
+local usesSharedAuctionHouse = addon.usesSharedAuctionHouse
 
 local AceConfigDialog = LibStub("AceConfigDialog-3.0")
 local LibDataBroker = LibStub("LibDataBroker-1.1")
@@ -172,8 +202,6 @@ local defaults = {
 	},
 }
 
-local playerFaction = UnitFactionGroup("player")
-local oppositeFaction = playerFaction == "Alliance" and "Horde" or "Alliance"
 local playerName, playerSecondName, playerFullName
 
 local function InitializeBroker()
@@ -221,6 +249,12 @@ function addon:OnInitialize()
 
 	self:RegisterChatCommand("yaaha", "OpenConfig")
 	InitializeBroker()
+
+	-- A neutral Pandaren remains in the same UI session after choosing a faction.
+	-- Refresh shared faction state once Blizzard confirms that choice.
+	if (isMists or isStandard) and IsPlayerNeutral() then
+		self:RegisterEvent("NEUTRAL_FACTION_SELECT_RESULT")
+	end
 end
 
 function addon:OpenConfig()
@@ -273,7 +307,7 @@ function addon:RoundMoney(copper, auctionPrice)
 	-- Only an actual auction price is subject to the auction house's
 	-- minimum price. All other money rounds to whole copper, and a known nonzero
 	-- value remains distinguishable from an exact zero.
-	local minimum = auctionPrice and self.AuctionHouseMinimumPrice or 1
+	local minimum = auctionPrice and self.auctionHouseMinimumPrice or 1
 	if rounded < minimum then
 		rounded = minimum
 	end
@@ -325,9 +359,9 @@ function addon:GetAuctionHouseTypeForScope(scope)
 	elseif scope == "realm" then
 		return "Neutral"
 	elseif scope == "factionrealm" then
-		return playerFaction
+		return self.playerFaction
 	elseif scope == "opposite" then
-		return oppositeFaction
+		return self.oppositeFaction
 	end
 end
 
@@ -336,9 +370,40 @@ function addon:GetRealmSales(auctionHouseType)
 		auctionHouseType = "Shared"
 	elseif auctionHouseType ~= "Alliance" and auctionHouseType ~= "Horde"
 		and auctionHouseType ~= "Neutral" then
-		auctionHouseType = playerFaction
+		auctionHouseType = self.playerFaction
 	end
 	return self.db.realm.sales.auctionHouses[auctionHouseType], auctionHouseType
+end
+
+function addon:NEUTRAL_FACTION_SELECT_RESULT(event, success)
+	if not success then
+		return
+	end
+
+	self:RefreshPlayerFaction()
+	if self.playerFaction ~= "Alliance" and self.playerFaction ~= "Horde" then
+		return
+	end
+
+	-- AceDB establishes factionrealm when the database is created. Rebind YAAHA's
+	-- active section because faction selection does not reload the user interface.
+	-- Neutral starting areas have no auction houses, so there is no neutral market
+	-- state to preserve or restore during this transition.
+	local previousFactionrealmKey = self.db.keys.factionrealm
+	local factionrealmKey = self.playerFaction .. " - " .. self.db.keys.realm
+	if previousFactionrealmKey ~= factionrealmKey then
+		local factionrealmregionKey = self.db.keys.factionrealmregion
+		self.db.keys.faction = self.playerFaction
+		self.db.keys.factionrealm = factionrealmKey
+		if factionrealmregionKey then
+			self.db.keys.factionrealmregion = factionrealmKey
+				.. factionrealmregionKey:sub(#previousFactionrealmKey + 1)
+		end
+		rawset(self.db, "faction", nil)
+		rawset(self.db, "factionrealm", nil)
+		rawset(self.db, "factionrealmregion", nil)
+	end
+	self:UnregisterEvent(event)
 end
 
 function addon:NormalizeCharacterName(name, secondName)
@@ -433,6 +498,25 @@ function addon:RefreshBrokerText()
 	end
 end
 
+local function AddMoneyValue(values, isNegative, numberColor, amount, symbol, texture, color, abbreviate, pad)
+	if abbreviate and addon.db.profile.formatLargeNumbers then
+		amount = FormatLargeNumber(amount)
+	elseif pad then
+		amount = format("%02d", amount)
+	end
+	if #values == 0 and isNegative then
+		amount = "-" .. amount
+	end
+	local displayedAmount = numberColor and numberColor .. amount .. "|r" or amount
+	if addon.db.profile.coinDisplayStyle == "texture" then
+		-- Blizzard's texture globals include a numeric placeholder. Format them with
+		-- zero, remove that zero, then prepend YAAHA's padded or abbreviated amount.
+		values[#values + 1] = displayedAmount .. stringSub(format(texture, 0, 0, 0), 2)
+	else
+		values[#values + 1] = displayedAmount .. color .. symbol .. "|r"
+	end
+end
+
 function addon:FormatMoney(copper, showZero, numberColor, auctionPrice)
 	-- Keep semantic color on the numeric portion only. Denomination letters and
 	-- coin textures retain their familiar gold, silver, and copper colors.
@@ -450,38 +534,23 @@ function addon:FormatMoney(copper, showZero, numberColor, auctionPrice)
 	copper = copper % 100
 
 	local values = {}
-	local function AddValue(amount, symbol, texture, color, abbreviate, pad)
-		if abbreviate and self.db.profile.formatLargeNumbers then
-			amount = FormatLargeNumber(amount)
-		elseif pad then
-			amount = format("%02d", amount)
-		end
-		if #values == 0 and isNegative then
-			amount = "-" .. amount
-		end
-		local displayedAmount = numberColor and numberColor .. amount .. "|r" or amount
-		if self.db.profile.coinDisplayStyle == "texture" then
-			-- Blizzard's texture globals include a numeric placeholder. Format them with
-			-- zero, remove that zero, then prepend YAAHA's padded or abbreviated amount.
-			values[#values + 1] = displayedAmount .. stringSub(format(texture, 0, 0, 0), 2)
-		else
-			values[#values + 1] = displayedAmount .. color .. symbol .. "|r"
-		end
-	end
-
 	if gold > 0 then
 		-- Blizzard's formatter abbreviates large values (for example, 12.3K), so it
 		-- belongs on gold only; silver and copper always remain two-digit magnitudes.
-		AddValue(gold, GOLD_AMOUNT_SYMBOL, GOLD_AMOUNT_TEXTURE, "|cffffd700", true)
+		AddMoneyValue(values, isNegative, numberColor, gold,
+			GOLD_AMOUNT_SYMBOL, GOLD_AMOUNT_TEXTURE, "|cffffd700", true)
 	end
 	if silver > 0 then
-		AddValue(silver, SILVER_AMOUNT_SYMBOL, SILVER_AMOUNT_TEXTURE, "|cffc7c7cf", false, true)
+		AddMoneyValue(values, isNegative, numberColor, silver,
+			SILVER_AMOUNT_SYMBOL, SILVER_AMOUNT_TEXTURE, "|cffc7c7cf", false, true)
 	end
 	if copper > 0 then
-		AddValue(copper, COPPER_AMOUNT_SYMBOL, COPPER_AMOUNT_TEXTURE, "|cffeda55f", false, true)
+		AddMoneyValue(values, isNegative, numberColor, copper,
+			COPPER_AMOUNT_SYMBOL, COPPER_AMOUNT_TEXTURE, "|cffeda55f", false, true)
 	end
 	if showZero and #values == 0 then
-		AddValue(0, COPPER_AMOUNT_SYMBOL, COPPER_AMOUNT_TEXTURE, "|cffeda55f")
+		AddMoneyValue(values, isNegative, numberColor, 0,
+			COPPER_AMOUNT_SYMBOL, COPPER_AMOUNT_TEXTURE, "|cffeda55f")
 	end
 
 	return tableConcat(values)

@@ -27,6 +27,11 @@ local module = addon:NewModule("MaterialBreakdownData")
 -- refine them without allowing a few unusually lucky or unlucky attempts to dominate.
 local STATIC_SAMPLE_WEIGHT = 100
 
+local function SortResults(left, right)
+	return left.chance > right.chance
+		or left.chance == right.chance and left.itemID < right.itemID
+end
+
 local methods = {}
 
 local function LearnedResultsAreValid(learned, allowed)
@@ -180,10 +185,7 @@ function methods:GetResults(itemInfo)
 		end
 	end
 
-	sort(results, function(left, right)
-		return left.chance > right.chance
-			or left.chance == right.chance and left.itemID < right.itemID
-	end)
+	sort(results, SortResults)
 	return {
 		itemID = itemID,
 		requiredQuantity = definition.requiredQuantity,

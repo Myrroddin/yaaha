@@ -4,7 +4,7 @@ local LibStub = LibStub
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("EnchantingScrollData")
-local isMists = addon.IsMists
+local isMists = addon.isMists
 
 local ARMOR = 4
 local WEAPON = 2

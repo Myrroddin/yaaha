@@ -40,14 +40,18 @@ local QUERY_RETRY_LIMIT = 3
 local QUERY_TIMEOUT = 10
 local RESULTS_PER_PAGE = 50
 local TRANSACTION_TIMEOUT = 10
-local GREEN_NUMBER = "|cff20ff20"
-local RED_NUMBER = "|cffff2020"
+local GREEN_NUMBER = addon.positiveNumberColor
+local RED_NUMBER = addon.negativeNumberColor
 
 local actionButton, restartButton, statusText
 local AdvanceRequest, ContinueAfterCandidate
 local currentCandidate, currentPage, currentRequest, nextResultIndex
 local pendingPurchase
 local queue, queueIndex
+
+local function SortByBestProfit(left, right)
+	return left.bestProfit > right.bestProfit
+end
 local running, searchPending, transactionPending, waitingForItemInfo, waitingForResults
 local resumePage, transactionListUpdated, waitingForPurchaseRefresh
 local queryAttempts = 0
@@ -321,6 +325,14 @@ function module:SkipCandidate(candidate)
 	end
 end
 
+local function FormatProfit(profit)
+	return addon:FormatMoney(profit, true, profit > 0 and GREEN_NUMBER or nil)
+end
+
+local function FormatLoss(loss)
+	return addon:FormatMoney(-loss, true, RED_NUMBER)
+end
+
 local function ShowCandidate(listing)
 	if not running or not currentRequest or not highBidderNotices then
 		return false
@@ -358,12 +370,6 @@ local function ShowCandidate(listing)
 	currentCandidate = listing
 
 	local unavailable = "--"
-	local function FormatProfit(profit)
-		return addon:FormatMoney(profit, true, profit > 0 and GREEN_NUMBER or nil)
-	end
-	local function FormatLoss(loss)
-		return addon:FormatMoney(-loss, true, RED_NUMBER)
-	end
 	local bidText = addon:FormatMoney(listing.payableBid)
 	if canBid then
 		bidText = format(L["%s (%s profit)"], bidText, FormatProfit(listing.bidProfit))
@@ -513,9 +519,7 @@ local function BuildQueue(vendorList, scope)
 
 	-- Showing the greatest possible profit first helps the player spend limited
 	-- gold on the strongest opportunities without automating any purchase decision.
-	sort(requests, function(left, right)
-		return left.bestProfit > right.bestProfit
-	end)
+	sort(requests, SortByBestProfit)
 	return requests
 end
 

@@ -31,8 +31,8 @@ local auctionHouseUI = addon:GetModule("AuctionHouseUI")
 local inventoryAverageBuy = addon:GetModule("InventoryAverageBuy")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
-local GREEN_NUMBER = "|cff20ff20"
-local RED_NUMBER = "|cffff2020"
+local GREEN_NUMBER = addon.positiveNumberColor
+local RED_NUMBER = addon.negativeNumberColor
 local RETIRE_DELAY = 3
 local itemCounts = {}
 local merchantOpen = false

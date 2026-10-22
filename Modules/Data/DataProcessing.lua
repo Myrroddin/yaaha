@@ -29,12 +29,17 @@ local module = addon:NewModule("DataProcessing")
 local disenchantingData = addon:GetModule("DisenchantingData")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
-local SECONDS_PER_DAY = 24 * 60 * 60
-local MAX_HISTORY_DAYS = 60
+local SECONDS_PER_DAY = addon.secondsPerDay
+local MAX_HISTORY_DAYS = addon.marketHistoryDays
 local ITEMS_PER_FRAME = 100
 local ITEM_DATA_TIMEOUT = 5
 local EARLY_OUTLIER_MIN_LISTINGS = 3
 local EARLY_OUTLIER_PRICE_MULTIPLIER = 10
+
+local function SortHistory(left, right)
+	return left.timestamp < right.timestamp
+		or left.timestamp == right.timestamp and left.value < right.value
+end
 
 -- These are the published relative weights used by AuctionDB. For YAAHA's longer
 -- horizons, observations older than fourteen days remain at the final weight of
@@ -232,10 +237,7 @@ local function CopyAndPruneHistory(history, scanTime)
 			end
 		end
 	end
-	sort(result, function(left, right)
-		return left.timestamp < right.timestamp
-			or left.timestamp == right.timestamp and left.value < right.value
-	end)
+	sort(result, SortHistory)
 	return result
 end
 
@@ -566,6 +568,12 @@ function module:ProcessScan(scope, scanDB, scanStats, callback)
 	return true
 end
 
+local function SnapshotKey(data)
+	return format("%.17g:%.17g:%.17g:%.17g:%.17g", data.currentMarketValue or 0,
+		data.minBid or 0, data.minBuyout or 0, data.auctionCount or 0,
+		data.auctionQuantity or 0)
+end
+
 function module:MergeSyncedMarketItem(scope, itemID, incoming, scopeDB)
 	scopeDB = scopeDB or addon.db[scope]
 	local stored = scopeDB.auctionDB[itemID] or {}
@@ -608,19 +616,10 @@ function module:MergeSyncedMarketItem(scope, itemID, incoming, scopeDB)
 			end
 		end
 	end
-	sort(history, function(left, right)
-		return left.timestamp < right.timestamp
-			or left.timestamp == right.timestamp and left.value < right.value
-	end)
+	sort(history, SortHistory)
 
 	-- Two scans can share a one-second server timestamp. Comparing every snapshot
 	-- field supplies a stable tie-breaker so both peers retain the same snapshot.
-	local function SnapshotKey(data)
-		return format("%.17g:%.17g:%.17g:%.17g:%.17g", data.currentMarketValue or 0,
-			data.minBid or 0, data.minBuyout or 0, data.auctionCount or 0,
-			data.auctionQuantity or 0)
-	end
-
 	if type(incoming.lastScan) == "number" and incoming.lastScan <= now
 		and (incoming.lastScan > (current.lastScan or 0)
 			or incoming.lastScan == (current.lastScan or 0)

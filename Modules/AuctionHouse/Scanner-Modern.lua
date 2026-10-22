@@ -4,7 +4,7 @@ local LibStub = LibStub
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("Scanner")
-local usesSharedAuctionHouse = addon.UsesSharedAuctionHouse
+local usesSharedAuctionHouse = addon.usesSharedAuctionHouse
 
 -- Modern clients require commodity and item search workflows rather than the
 -- paged or replicated Classic scan. Keep the shared contract safe meanwhile.

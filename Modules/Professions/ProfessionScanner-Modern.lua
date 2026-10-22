@@ -10,9 +10,8 @@ local LibStub = LibStub
 local select = select
 local type = type
 
-local ALCHEMY_SKILL_LINE = 171
-
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
+local ALCHEMY_SKILL_LINE = addon.alchemySkillLineID
 local module = addon:GetModule("ProfessionScanner")
 
 local scanPending = false

@@ -3,6 +3,7 @@
 local LibStub = LibStub
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
+local isStandard = addon.isStandard
 local module = addon:NewModule("EnchantingCraftData")
 
 -- Mists is a complete Vanilla-through-Mists baseline rather than an extension
@@ -38,7 +39,7 @@ local craftedItems = {
 	[118237] = 74249, -- Spirit Dust (Mysterious Diffusion)
 }
 
-if addon.IsStandard then
+if isStandard then
 	-- Standard's profession API supplies recipe output item IDs directly. Keep
 	-- this inherited map as a fallback and amend it only with confirmed changes.
 end

@@ -3,6 +3,9 @@
 local LibStub = LibStub
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
+local isForever = addon.isForever
+local isTBC = addon.isTBC
+local isWrath = addon.isWrath
 local module = addon:NewModule("EnchantingCraftData")
 
 -- Vanilla is the Classic-family baseline. Forever may amend it later without
@@ -30,7 +33,7 @@ local craftedItems = {
 	[25130] = 20748, -- Brilliant Mana Oil
 }
 
-if addon.IsForever then
+if isForever then
 	craftedItems[14810] = nil -- Greater Mystic Wand (item 11290)
 
 	craftedItems[439134] = 217287 -- Greater Mystic Wand
@@ -75,7 +78,7 @@ if addon.IsForever then
 	craftedItems[1306523] = 279249 -- Totem of Urgency
 	craftedItems[1306524] = 279250 -- Idol of Swiftness
 	craftedItems[1306525] = 279251 -- Idol of the Ursine Twins
-elseif addon.IsTBC or addon.IsWrath then
+elseif isTBC or isWrath then
 	craftedItems[28016] = 22521 -- Superior Mana Oil
 	craftedItems[28019] = 22522 -- Superior Wizard Oil
 	craftedItems[28021] = 22445 -- Arcane Dust
@@ -88,7 +91,7 @@ elseif addon.IsTBC or addon.IsWrath then
 	craftedItems[42613] = 22448 -- Nexus Transformation
 	craftedItems[42615] = 22448 -- Small Prismatic Shard
 	craftedItems[45765] = 22449 -- Void Shatter
-	if addon.IsWrath then
+	if isWrath then
 		craftedItems[60619] = 44452 -- Runed Titanium Rod
 	end
 end

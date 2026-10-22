@@ -3,6 +3,7 @@
 local LibStub = LibStub
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
+local isStandard = addon.isStandard
 local module = addon:GetModule("ConvertData")
 
 local MISTS_COMMON_INKS = { 37101, 39469, 39774, 43116, 43118, 43120, 43122, 43124, 43126, 61978 }
@@ -190,6 +191,6 @@ local function AddStandardExtensions()
 end
 
 AddMistsBaseline()
-if addon.IsStandard then
+if isStandard then
 	AddStandardExtensions()
 end

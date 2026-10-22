@@ -3,12 +3,11 @@
 local floor = math.floor
 local LibStub = LibStub
 local next = next
+local sort = table.sort
 local type = type
-local UnitFactionGroup = UnitFactionGroup
 
-local playerFaction = UnitFactionGroup("player")
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
-local usesSharedAuctionHouse = addon.UsesSharedAuctionHouse
+local usesSharedAuctionHouse = addon.usesSharedAuctionHouse
 local saleCollector = addon:GetModule("SaleCollector")
 local disenchantingData = addon:GetModule("DisenchantingData")
 local professionScanner = addon:GetModule("ProfessionScanner")
@@ -22,6 +21,7 @@ local API_VERSION = 1
 ---@alias YAAHA_API.DataUpdateSource "scan"|"sync"
 ---@alias YAAHA_API.DataUpdateEvent "AUCTION_HOUSE_DATA_UPDATED"
 ---@alias YAAHA_API.MarketValueSource "currentMarketValue"|"midweekMarketValue"|"weeklyMarketValue"|"biweeklyMarketValue"|"monthlyMarketValue"|"bimonthlyMarketValue"
+---@alias YAAHA_API.AuctionHouseIterator fun(): integer?, YAAHA_API.ItemData?
 
 ---@class YAAHA_API.ItemData
 ---@field auctionCount? integer Number of listings in the current snapshot.
@@ -67,7 +67,7 @@ local API_VERSION = 1
 ---@field sampleCount integer Number of learned local and synchronized disenchantments contributing to this result range.
 ---@field results YAAHA_API.PricedDisenchantMaterial[] Priced material results.
 
----@alias YAAHA_API.MaterialValueSource "market"|"vendor"|"convert"|"crafting"|"soulboundFallback"
+---@alias YAAHA_API.MaterialValueSource "market"|"vendor"|"convert"|"crafting"|"derived"|"soulboundFallback"
 
 ---@class YAAHA_API.CraftingConversion
 ---@field itemID integer Converted source-material item ID.
@@ -105,6 +105,7 @@ local API_VERSION = 1
 ---@field version integer Public API version.
 ---@field GetVersion fun(): integer
 ---@field GetItemData fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): YAAHA_API.ItemData?
+---@field IterateAuctionHouse fun(auctionHouseType?: YAAHA_API.AuctionHouseType): YAAHA_API.AuctionHouseIterator?
 ---@field GetAuctionCount fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
 ---@field GetAuctionQuantity fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
 ---@field GetMinBid fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
@@ -172,7 +173,7 @@ local function ResolveAuctionHouseType(auctionHouseType)
 		end
 		return
 	end
-	auctionHouseType = auctionHouseType or playerFaction
+	auctionHouseType = auctionHouseType or addon.playerFaction
 	if auctionHouseType == "Alliance" or auctionHouseType == "Horde"
 		or auctionHouseType == "Neutral" then
 		return auctionHouseType
@@ -187,7 +188,7 @@ local function GetAuctionScope(auctionHouseType)
 	if auctionHouseType == "Neutral" then
 		return "realm"
 	end
-	if auctionHouseType == playerFaction then
+	if auctionHouseType == addon.playerFaction then
 		return "factionrealm"
 	end
 	if auctionHouseType == "Alliance" or auctionHouseType == "Horde" then
@@ -234,6 +235,10 @@ local function NormalizeRate(value)
 	return floor(value * 1000 + 0.5) / 1000
 end
 
+local function SortAuctionResults(left, right)
+	return left[1] < right[1]
+end
+
 local function GetItemSource(itemID, auctionHouseType)
 	if type(itemID) ~= "number" or itemID <= 0 or itemID ~= floor(itemID) then
 		return nil
@@ -258,15 +263,7 @@ local function GetRealmRollingSaleMetrics(itemID, auctionHouseType)
 	end
 end
 
----@param itemID integer
----@param auctionHouseType? YAAHA_API.AuctionHouseType
----@return YAAHA_API.ItemData? data
-function API.GetItemData(itemID, auctionHouseType)
-	local source = GetItemSource(itemID, auctionHouseType)
-	if not source then
-		return nil
-	end
-
+local function CopyItemData(source)
 	-- Copy only the stable, calculated public surface. In particular, consumers
 	-- cannot mutate YAAHA's database or inspect its raw observation history.
 	local data = {}
@@ -286,8 +283,48 @@ function API.GetItemData(itemID, auctionHouseType)
 	if type(source.lastScan) == "number" and source.lastScan > 0 then
 		data.lastScan = NormalizeQuantity(source.lastScan)
 	end
-
 	return next(data) and data or nil
+end
+
+---@param itemID integer
+---@param auctionHouseType? YAAHA_API.AuctionHouseType
+---@return YAAHA_API.ItemData? data
+function API.GetItemData(itemID, auctionHouseType)
+	local source = GetItemSource(itemID, auctionHouseType)
+	if not source then
+		return nil
+	end
+
+	return CopyItemData(source)
+end
+
+---@param auctionHouseType? YAAHA_API.AuctionHouseType
+---@return YAAHA_API.AuctionHouseIterator? iterator
+function API.IterateAuctionHouse(auctionHouseType)
+	local auctionDB = GetAuctionDB(auctionHouseType)
+	if not auctionDB then
+		return nil
+	end
+
+	-- Snapshot and sort the public results so a consumer cannot mutate YAAHA's
+	-- database and receives deterministic traversal even if data updates later.
+	local results = {}
+	for itemID, source in pairs(auctionDB) do
+		local data = CopyItemData(source)
+		if data then
+			results[#results + 1] = { itemID, data }
+		end
+	end
+	sort(results, SortAuctionResults)
+
+	local index = 0
+	return function()
+		index = index + 1
+		local result = results[index]
+		if result then
+			return result[1], result[2]
+		end
+	end
 end
 
 ---@param itemID integer

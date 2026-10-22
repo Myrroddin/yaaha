@@ -15,11 +15,10 @@ local PanelTemplates_TabResize = PanelTemplates_TabResize
 local PlaySound = PlaySound
 local SOUNDKIT = SOUNDKIT
 local type = type
-local UnitFactionGroup = UnitFactionGroup
 local UNKNOWN = UNKNOWN
 
-local playerFaction, localizedPlayerFaction = UnitFactionGroup("player")
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
+local playerFaction = addon.playerFaction
 local module = addon:NewModule("AuctionHouseUI", "AceEvent-3.0")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
@@ -230,7 +229,8 @@ function module:SetAuctionScope(scope)
 	end
 
 	local scopeName = scope == "realm" and FACTION_NEUTRAL
-		or scope == "factionrealm" and (localizedPlayerFaction or playerFaction) or UNKNOWN
+		or scope == "factionrealm"
+		and (addon.localizedPlayerFaction or playerFaction) or UNKNOWN
 	scopeText:SetFormattedText(L["Auction house: %s"], scopeName)
 end
 

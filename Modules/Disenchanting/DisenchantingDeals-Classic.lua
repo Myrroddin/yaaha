@@ -32,7 +32,7 @@ local scanner = addon:GetModule("Scanner")
 local tooltip
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
-local GREEN_NUMBER = "|cff20ff20"
+local GREEN_NUMBER = addon.positiveNumberColor
 local POPUP_NAME = "YAAHA_DISENCHANTING_DEAL"
 local QUERY_RETRY_LIMIT = 3
 local QUERY_TIMEOUT = 10
@@ -43,6 +43,10 @@ local actionButton, statusText
 local currentCandidate, currentPage, currentRequest, nextResultIndex
 local pendingPurchase
 local queue, queueIndex
+
+local function SortByProfit(left, right)
+	return left.profit > right.profit
+end
 local resumePage, running, searchPending, transactionListUpdated, transactionPending
 local waitingForItemInfo, waitingForPurchaseRefresh, waitingForResults
 local queryAttempts = 0
@@ -314,9 +318,7 @@ local function BuildQueue(disenchantList, scope)
 			end
 		end
 	end
-	sort(requests, function(left, right)
-		return left.profit > right.profit
-	end)
+	sort(requests, SortByProfit)
 	return requests
 end
 

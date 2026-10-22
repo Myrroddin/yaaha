@@ -18,6 +18,10 @@ local SELL_PRICE = SELL_PRICE
 local SHIFT_KEY = SHIFT_KEY
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
+local isClassicEra = addon.isClassicEra
+local isForever = addon.isForever
+local isTBC = addon.isTBC
+local usesSharedAuctionHouse = addon.usesSharedAuctionHouse
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 local LibDBIcon = LibStub("LibDBIcon-1.0")
 
@@ -221,7 +225,7 @@ function addon:GetOptions()
 						set = function(_, value)
 							addon.db.profile.prospectingDealThreshold = value
 						end,
-						hidden = addon.IsClassicEra or addon.IsForever,
+						hidden = isClassicEra or isForever,
 					},
 					millingDealThreshold = {
 						order = 110,
@@ -241,7 +245,7 @@ function addon:GetOptions()
 						set = function(_, value)
 							addon.db.profile.millingDealThreshold = value
 						end,
-						hidden = addon.IsClassicEra or addon.IsForever or addon.IsTBC,
+						hidden = isClassicEra or isForever or isTBC,
 					}
 				}
 			},
@@ -254,14 +258,14 @@ function addon:GetOptions()
 						order = 10,
 						type = "description",
 						name = "* " .. format(L["Hold %s while viewing an item tooltip to show neutral auction-house data."], ALT_KEY),
-						hidden = addon.UsesSharedAuctionHouse,
+						hidden = usesSharedAuctionHouse,
 						width = "full"
 					},
 					oppositeFactionModifier = {
 						order = 20,
 						type = "description",
 						name = "* " .. format(L["Hold %s while viewing an item tooltip to show opposite-faction auction-house data."], CTRL_KEY),
-						hidden = addon.UsesSharedAuctionHouse,
+						hidden = usesSharedAuctionHouse,
 						width = "full"
 					},
 					stackModifier = {
@@ -274,7 +278,7 @@ function addon:GetOptions()
 						order = 40,
 						type = "description",
 						name = "* " .. format(L["Holding %s + %s always shows neutral auction-house data."], CTRL_KEY, ALT_KEY),
-						hidden = addon.UsesSharedAuctionHouse,
+						hidden = usesSharedAuctionHouse,
 						width = "full"
 					},
 					trendDisplay = {

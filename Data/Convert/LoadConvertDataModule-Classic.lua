@@ -3,6 +3,8 @@
 local LibStub = LibStub
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
+local isTBC = addon.isTBC
+local isWrath = addon.isWrath
 local module = addon:GetModule("ConvertData")
 
 -- Vanilla is the Classic-family baseline. Forever may amend it later without
@@ -18,7 +20,7 @@ module:AddReversibleConversion(16203, 16202, 3) -- Greater/Lesser Eternal Essenc
 -- profession scanner rather than being assumed available for material costs.
 module:AddConversion(2318, 2934, 3, true) -- Light Leather from Ruined Leather Scraps
 
-if addon.IsTBC or addon.IsWrath then
+if isTBC or isWrath then
 	module:AddReversibleConversion(22446, 22447, 3) -- Greater/Lesser Planar Essence
 	module:AddConversion(21885, 22578, 10) -- Primal Water from Motes
 	module:AddConversion(22456, 22577, 10) -- Primal Shadow from Motes
@@ -30,7 +32,7 @@ if addon.IsTBC or addon.IsWrath then
 	module:AddConversion(21887, 25649, 5, true) -- Knothide Leather from Scraps
 end
 
-if addon.IsWrath then
+if isWrath then
 	module:AddConversion(33568, 33567, 5, true) -- Borean Leather from Scraps
 	module:AddReversibleConversion(34055, 34056, 3) -- Greater/Lesser Cosmic Essence
 	module:AddConversion(34052, 34053, 3) -- Dream Shard from Small Dream Shards
