@@ -22,6 +22,8 @@ local ItemRefShoppingTooltip2 = ItemRefShoppingTooltip2
 local LibStub = LibStub
 local match = string.match
 local next = next
+local pairs = pairs
+local PROFESSIONS_CRAFTING = PROFESSIONS_CRAFTING
 local SELL_PRICE = SELL_PRICE
 local setmetatable = setmetatable
 local ShoppingTooltip1 = ShoppingTooltip1
@@ -90,6 +92,7 @@ AddTooltip(ItemRefShoppingTooltip1)
 AddTooltip(ItemRefShoppingTooltip2)
 local tooltipState = setmetatable({}, { __mode = "k" })
 local tooltipDisplayState = setmetatable({}, { __mode = "k" })
+local itemTooltipFlushPending = false
 local GREEN_NUMBER = addon.positiveNumberColor
 local RED_NUMBER = addon.negativeNumberColor
 local CRAFT_SALE_VALUE_FIELDS = {
@@ -263,14 +266,14 @@ local function AddCraftingLines(lineState, result, showBreakdown, multiplier)
 			FormatExpectedQuantity(material.quantity * quantityScale))
 		local value = material.totalValue
 			and addon:FormatMoney(material.totalValue * quantityScale) or "--"
-		AddTooltipLine(lineState, L["Crafting"], label, value)
+		AddTooltipLine(lineState, PROFESSIONS_CRAFTING, label, value)
 		-- Keep the recipe's actual reagent above; this is only the cheaper way
 		-- to obtain it and never changes the saved recipe requirements.
 		if material.source == "convert" and material.detail then
 			local convertedName, convertedLink = C_Item.GetItemInfo(material.detail.itemID)
 			local sourceQuantity = material.detail.quantity < 1 and 1 or material.detail.quantity
 			local resultQuantity = material.detail.quantity < 1 and 1 / material.detail.quantity or 1
-			AddTooltipLine(lineState, L["Crafting"], format(L["Cheaper conversion: %s x%s -> %s x%s"],
+			AddTooltipLine(lineState, PROFESSIONS_CRAFTING, format(L["Cheaper conversion: %s x%s -> %s x%s"],
 				convertedLink or convertedName or tostring(material.detail.itemID),
 				FormatExpectedQuantity(sourceQuantity), link or name or tostring(material.itemID),
 				FormatExpectedQuantity(resultQuantity)), "")
@@ -405,7 +408,7 @@ function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 			addon:FormatMoney(inventoryBuy * multiplier))
 	end
 	if settings["19-craftingValue"] and knownCraft then
-		AddTooltipLine(lineState, L["Crafting"], L["Crafting cost"],
+		AddTooltipLine(lineState, PROFESSIONS_CRAFTING, L["Crafting cost"],
 			FormatCraftingValue(factionCrafting, multiplier, data, auctionCut))
 	end
 	AddCraftingLines(lineState, factionCrafting, settings["20-craftingResults"], multiplier)
@@ -484,7 +487,7 @@ function module:AddRecipeData(tooltip, spellID, scope, reuseHeader, suppressRefr
 	local lineState = CreateLineState(tooltip, scopeName, reuseHeader)
 
 	if settings["19-craftingValue"] then
-		AddTooltipLine(lineState, L["Crafting"], L["Crafting cost"],
+		AddTooltipLine(lineState, PROFESSIONS_CRAFTING, L["Crafting cost"],
 			FormatCraftingValue(factionCrafting, 1,
 				factionCrafting and factionCrafting.outputItemID
 					and scopeDB.auctionDB[factionCrafting.outputItemID],
@@ -509,6 +512,19 @@ function module:ShowTooltip(owner, link, itemID, scope)
 	GameTooltip:Show()
 end
 
+local function FlushPendingItemTooltips()
+	itemTooltipFlushPending = false
+	for tooltip, state in pairs(tooltipState) do
+		if state.pending then
+			state.pending = nil
+			if tooltip:IsShown() and not HasRenderedYAAHAData(tooltip) then
+				module:AddItemData(tooltip, state.itemID)
+				RememberDisplay(tooltip, "item", state.itemID)
+			end
+		end
+	end
+end
+
 function module:ProcessItemTooltip(tooltip, itemID, link, immediate)
 	local state = tooltipState[tooltip]
 	if not itemID or state and state.itemID == itemID and HasRenderedYAAHAData(tooltip) then
@@ -531,15 +547,10 @@ function module:ProcessItemTooltip(tooltip, itemID, link, immediate)
 	-- displayed item before their craft callback supplies the real spell. Waiting
 	-- until the current render finishes lets that callback replace this state and
 	-- prevents both the false item section and a duplicate recipe section.
-	C_Timer.After(0, function()
-		if tooltipState[tooltip] ~= state or not tooltip:IsShown()
-			or HasRenderedYAAHAData(tooltip) then
-			return
-		end
-		state.pending = nil
-		module:AddItemData(tooltip, itemID)
-		RememberDisplay(tooltip, "item", itemID)
-	end)
+	if not itemTooltipFlushPending then
+		itemTooltipFlushPending = true
+		C_Timer.After(0, FlushPendingItemTooltips)
+	end
 end
 
 function module:ProcessSpellTooltip(tooltip, spellID)

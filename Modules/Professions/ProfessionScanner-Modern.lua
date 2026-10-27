@@ -7,15 +7,18 @@ local GetProfessionInfo = GetProfessionInfo
 local GetProfessions = GetProfessions
 local ipairs = ipairs
 local LibStub = LibStub
-local select = select
 local type = type
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local ALCHEMY_SKILL_LINE = addon.alchemySkillLineID
 local module = addon:GetModule("ProfessionScanner")
 
+local PROFESSION_SLOT_COUNT = 5
+
 local scanPending = false
 local scanning = false
+local scanAttempt = 1
+local professionSlots = {}
 
 local function IsExternalProfession()
 	return C_TradeSkillUI.IsNPCCrafting()
@@ -232,6 +235,13 @@ end
 
 local QueueScan
 
+local function RunScan()
+	scanPending = false
+	if not ScanProfession() and scanAttempt < 11 then
+		QueueScan(0.2, scanAttempt + 1)
+	end
+end
+
 -- A zero-second timer defers scanning until the next frame, after Blizzard
 -- finishes the current profession event. Bounded retries wait for missing data.
 QueueScan = function(delay, attempt)
@@ -239,20 +249,22 @@ QueueScan = function(delay, attempt)
 		return
 	end
 	scanPending = true
-	C_Timer.After(delay or 0, function()
-		scanPending = false
-		attempt = attempt or 1
-		if not ScanProfession() and attempt < 11 then
-			QueueScan(0.2, attempt + 1)
-		end
-	end)
+	scanAttempt = attempt or 1
+	C_Timer.After(delay or 0, RunScan)
+end
+
+local function ShouldRemoveProfession(_, profession, learnedSkillLines)
+	local parentSkillLineID = profession.parentSkillLineID or profession.skillLineID
+	return profession.collector == "modern"
+		and parentSkillLineID and not learnedSkillLines[parentSkillLineID]
 end
 
 local function ReconcileProfessions()
 	local learnedSkillLines = {}
-	local count = select("#", GetProfessions())
-	for slot = 1, count do
-		local professionIndex = select(slot, GetProfessions())
+	professionSlots[1], professionSlots[2], professionSlots[3],
+		professionSlots[4], professionSlots[5] = GetProfessions()
+	for slot = 1, PROFESSION_SLOT_COUNT do
+		local professionIndex = professionSlots[slot]
 		if professionIndex then
 			local _, _, _, _, _, _, skillLineID = GetProfessionInfo(professionIndex)
 			if skillLineID then
@@ -260,11 +272,7 @@ local function ReconcileProfessions()
 			end
 		end
 	end
-	module:RemoveProfessions(function(_, profession)
-		local parentSkillLineID = profession.parentSkillLineID or profession.skillLineID
-		return profession.collector == "modern"
-			and parentSkillLineID and not learnedSkillLines[parentSkillLineID]
-	end)
+	module:RemoveProfessions(ShouldRemoveProfession, learnedSkillLines)
 end
 
 function module:GetCraftRecipeSpellID(recipeID)

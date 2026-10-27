@@ -1,13 +1,11 @@
 -- Exchanges normalized auction data, realm-sale observations, and learned material
 -- breakdown results only with guild members in the same Connected Realm group.
 
-local C_AutoComplete = C_AutoComplete
 local C_EncodingUtil = C_EncodingUtil
 local C_Timer = C_Timer
 local FACTION_ALLIANCE = FACTION_ALLIANCE
 local FACTION_HORDE = FACTION_HORDE
 local FACTION_NEUTRAL = FACTION_NEUTRAL
-local GetNormalizedRealmName = GetNormalizedRealmName
 local GetServerTime = GetServerTime
 local IsInGuild = IsInGuild
 local IsInInstance = IsInInstance
@@ -20,8 +18,6 @@ local pcall = pcall
 local random = math.random
 local sort = table.sort
 local stringByte = string.byte
-local stringGsub = string.gsub
-local stringLower = string.lower
 local tableConcat = table.concat
 local tableRemove = table.remove
 local type = type
@@ -65,7 +61,6 @@ local SYNC_MARKET_FIELDS = {
 local COLLECTOR_KEYS = { "disenchantData", "millingData", "prospectData" }
 local pendingPulls = {}
 local seenPulls = {}
-local connectedRealmKey
 
 local function IsSelf(sender)
 	local normalizedSender = addon:NormalizeCharacterName(sender)
@@ -103,46 +98,8 @@ local function CanSyncNow()
 	return addon.db.profile.syncData and IsInGuild() and not IsInInstance()
 end
 
-local function NormalizeRealmName(realm)
-	return type(realm) == "string" and realm ~= ""
-		and stringLower(stringGsub(realm, "[%s%-%.]", "")) or nil
-end
-
-local function AddRealm(realms, realmSet, realm)
-	realm = NormalizeRealmName(realm)
-	if realm and not realmSet[realm] then
-		realmSet[realm] = true
-		realms[#realms + 1] = realm
-	end
-end
-
--- Every member of a Connected Realm group sees the same auction house. Sorting
--- the normalized current and connected realm names produces the same wire key
--- from any realm in that group without maintaining a static realm database.
-local function GetConnectedRealmKey()
-	if connectedRealmKey then
-		return connectedRealmKey
-	end
-	local realmSet = {}
-	local realms = {}
-
-	AddRealm(realms, realmSet, GetNormalizedRealmName())
-	local succeeded, connectedRealms = pcall(C_AutoComplete.GetAutoCompleteRealms)
-	if succeeded and type(connectedRealms) == "table" then
-		for index = 1, #connectedRealms do
-			AddRealm(realms, realmSet, connectedRealms[index])
-		end
-	end
-	if #realms == 0 then
-		return
-	end
-	sort(realms)
-	connectedRealmKey = tableConcat(realms, "\031")
-	return connectedRealmKey
-end
-
 local function EncodePacket(kind, data)
-	local realmGroup = GetConnectedRealmKey()
+	local realmGroup = addon:GetConnectedRealmKey()
 	if not realmGroup then
 		return
 	end
@@ -168,7 +125,7 @@ local function DecodePacket(text)
 	local decompressed = C_EncodingUtil.DecompressString(decoded, COMPRESSION_METHOD)
 	local success, packet = addon:Deserialize(decompressed)
 	if success and type(packet) == "table" and packet.version == PROTOCOL_VERSION
-		and packet.realmGroup == GetConnectedRealmKey()
+		and packet.realmGroup == addon:GetConnectedRealmKey()
 		and type(packet.kind) == "string" and type(packet.data) == "table" then
 		return packet
 	end
@@ -805,6 +762,14 @@ local function RequestPush()
 	end
 end
 
+local function RequestInitialPush()
+	-- Eligibility may change during the login delay, particularly if the player
+	-- enters an instance. Recheck before sending rather than trusting old state.
+	if CanSyncNow() then
+		RequestPush()
+	end
+end
+
 local function ScheduleAdvertisement(sender, requestID)
 	if type(requestID) ~= "string" or seenPulls[requestID] then
 		return
@@ -946,15 +911,11 @@ function module:PLAYER_ENTERING_WORLD(_, isInitialLogin)
 	-- zones cannot request data, and an unanswered request remains silent. Waiting
 	-- gives the client and other addons time to finish their own login work, while
 	-- naturally avoiding traffic from characters which log out again immediately.
-	C_Timer.After(INITIAL_PULL_DELAY, function()
-		-- Eligibility may change during the delay, particularly if the player enters
-		-- an instance. Do not send a deferred request under conditions which would
-		-- have prevented an immediate one.
-		if not CanSyncNow() then
-			return
-		end
-		RequestPush()
-	end)
+	C_Timer.After(INITIAL_PULL_DELAY, RequestInitialPush)
+end
+
+local function OnCommReceived(...)
+	module:OnCommReceived(...)
 end
 
 function module:OnEnable()
@@ -963,9 +924,7 @@ function module:OnEnable()
 	end
 	local _, _, fullName = addon:GetPlayerIdentity()
 	playerFullName = fullName
-	addon:RegisterComm(COMM_PREFIX, function(...)
-		module:OnCommReceived(...)
-	end)
+	addon:RegisterComm(COMM_PREFIX, OnCommReceived)
 	self:RegisterEvent("PLAYER_ENTERING_WORLD")
 	self:RegisterMessage("YAAHA_BREAKDOWN_OBSERVED")
 	self:RegisterMessage("YAAHA_SCAN_PROCESSED")

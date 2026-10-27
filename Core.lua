@@ -2,6 +2,7 @@
 -- rounding rules, and money formatting.
 
 local abs = math.abs
+local C_AutoComplete = C_AutoComplete
 local COPPER_AMOUNT_SYMBOL = COPPER_AMOUNT_SYMBOL
 local COPPER_AMOUNT_TEXTURE = COPPER_AMOUNT_TEXTURE
 local DECIMAL_SEPERATOR = DECIMAL_SEPERATOR or "."
@@ -24,14 +25,19 @@ local LE_GAME_ERR_NOT_ENOUGH_MONEY = LE_GAME_ERR_NOT_ENOUGH_MONEY
 local LibStub = LibStub
 local IsPlayerNeutral = IsPlayerNeutral
 local NameUtil = NameUtil
+local pcall = pcall
 local random = math.random
 local rawset = rawset
+local sort = table.sort
 local SILVER_AMOUNT_SYMBOL = SILVER_AMOUNT_SYMBOL
 local SILVER_AMOUNT_TEXTURE = SILVER_AMOUNT_TEXTURE
 local stringMatch = string.match
+local stringGsub = string.gsub
+local stringLower = string.lower
 local stringSub = string.sub
 local tableConcat = table.concat
 local tonumber = tonumber
+local type = type
 local UnitFactionGroup = UnitFactionGroup
 local UnitFullName = UnitFullName
 local WOW_PROJECT_BURNING_CRUSADE_CLASSIC = WOW_PROJECT_BURNING_CRUSADE_CLASSIC
@@ -63,6 +69,10 @@ local isForever = addon.isForever
 local isMists = addon.isMists
 local isStandard = addon.isStandard
 addon.usesSharedAuctionHouse = isStandard or isMists
+-- Do not infer this by probing C_AuctionHouse.SupportsCopperValues. Extracted
+-- Classic Era files document and call that API, but their TOCs exclude Era and
+-- the C_AuctionHouse namespace does not exist in the running Era client. Mists
+-- and Standard use silver; the other supported clients retain copper prices.
 addon.auctionHouseMinimumPrice = addon.usesSharedAuctionHouse and 100 or 1
 addon.alchemySkillLineID = 171
 addon.base64Variant = Enum.Base64Variant.StandardUrlSafe
@@ -203,22 +213,37 @@ local defaults = {
 }
 
 local playerName, playerSecondName, playerFullName
+local connectedRealmKey
+
+local function NormalizeRealmGroupName(realm)
+	return type(realm) == "string" and realm ~= ""
+		and stringLower(stringGsub(realm, "[%s%-%.]", "")) or nil
+end
+
+local function AddRealmToGroup(realms, realmSet, realm)
+	realm = NormalizeRealmGroupName(realm)
+	if realm and not realmSet[realm] then
+		realmSet[realm] = true
+		realms[#realms + 1] = realm
+	end
+end
 
 local function InitializeBroker()
+	local vendorFlipTracking = addon:GetModule("VendorFlipTracking")
 	---@diagnostic disable-next-line: inject-field
 	addon.brokerObject = LibDataBroker:NewDataObject("YAAHA", {
 		type = "data source",
 		tocname = "YAAHA",
 		label = "YAAHA",
 		icon = BROKER_ICON,
-		text = addon:GetModule("VendorFlipTracking"):GetFormattedProfit(),
+		text = vendorFlipTracking:GetFormattedProfit(),
 		OnClick = function()
 			addon:OpenConfig()
 		end,
 		OnTooltipShow = function(tooltip)
 			tooltip:AddLine("YAAHA")
 			tooltip:AddLine(format(L["Vendor flip profit: %s"],
-				addon:GetModule("VendorFlipTracking"):GetFormattedProfit()))
+				vendorFlipTracking:GetFormattedProfit()))
 			tooltip:AddLine(L["Click for configuration."])
 			tooltip:Show()
 		end,
@@ -340,6 +365,30 @@ end
 function addon:GetCharacterKey()
 	local _, _, fullName = self:GetPlayerIdentity()
 	return fullName
+end
+
+function addon:GetConnectedRealmKey()
+	if connectedRealmKey then
+		return connectedRealmKey
+	end
+	local realmSet = {}
+	local realms = {}
+
+	AddRealmToGroup(realms, realmSet, GetNormalizedRealmName())
+	local succeeded, connectedRealms = pcall(C_AutoComplete.GetAutoCompleteRealms)
+	if succeeded and type(connectedRealms) == "table" then
+		for index = 1, #connectedRealms do
+			AddRealmToGroup(realms, realmSet, connectedRealms[index])
+		end
+	end
+	if #realms == 0 then
+		return
+	end
+	-- Every member of a Connected Realm group derives the same stable key without
+	-- requiring YAAHA to maintain Blizzard's changing realm-connection database.
+	sort(realms)
+	connectedRealmKey = tableConcat(realms, "\031")
+	return connectedRealmKey
 end
 
 function addon:GetSyncSourceID()

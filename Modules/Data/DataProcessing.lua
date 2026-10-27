@@ -27,6 +27,8 @@ local type = type
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("DataProcessing")
 local disenchantingData = addon:GetModule("DisenchantingData")
+local millingData = addon:GetModule("MillingData", true)
+local prospectingData = addon:GetModule("ProspectingData", true)
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
 local SECONDS_PER_DAY = addon.secondsPerDay
@@ -100,7 +102,7 @@ local trendFields = {
 local processingFrame = CreateFrame("Frame")
 processingFrame:Hide()
 
-local worker, completed
+local worker, processingContext
 local totalItems = 0
 local processedItems = 0
 
@@ -408,7 +410,7 @@ local function BuildVendorItem(itemID, scanData)
 	return #result.auctions > 0 and result or nil
 end
 
-local function BuildDisenchantItem(itemID, scanData, priceDB)
+local function BuildDisenchantItem(itemID, scanData, priceDB, threshold)
 	if not scanData or not scanData.auctions then
 		return
 	end
@@ -428,8 +430,7 @@ local function BuildDisenchantItem(itemID, scanData, priceDB)
 	for count, byCount in pairs(scanData.auctions) do
 		for _, byBid in pairs(byCount) do
 			for unitBuyout, numAuctions in pairs(byBid) do
-				if addon:IsBreakdownDeal(unitBuyout, disenchant.expectedValue,
-					addon.db.profile.disenchantingDealThreshold) then
+				if addon:IsBreakdownDeal(unitBuyout, disenchant.expectedValue, threshold) then
 					local key = format("%d:%d", count, unitBuyout)
 					local auction = result.auctions[key]
 					if auction then
@@ -449,43 +450,173 @@ local function BuildDisenchantItem(itemID, scanData, priceDB)
 	return next(result.auctions) and result or nil
 end
 
-local function FinishProcessing(success, result, vendorList, disenchantList, scope, scanStats, callback)
+local function BuildMaterialBreakdownItem(itemID, scanData, priceDB, dataModule, threshold)
+	if not dataModule or not scanData or not scanData.auctions then
+		return
+	end
+
+	local breakdown = dataModule:GetValue(itemID, nil, priceDB)
+	local expectedUnitValue = breakdown and breakdown.expectedUnitValue
+	if not expectedUnitValue or expectedUnitValue <= 0 then
+		return
+	end
+
+	local result = {
+		expectedUnitValue = expectedUnitValue,
+		auctions = {},
+	}
+	-- Prospecting and milling consume fixed recipe quantities, but neither Classic
+	-- auction stacks nor Modern commodity price-tier quantities need to be exact
+	-- multiples. Compare per item; the live client-specific search decides which
+	-- listing or arbitrary commodity quantity the player may actually purchase.
+	for count, byCount in pairs(scanData.auctions) do
+		for _, byBid in pairs(byCount) do
+			for unitBuyout, numAuctions in pairs(byBid) do
+				local buyout = floor(unitBuyout * count + 0.5)
+				local expectedValue = expectedUnitValue * count
+				if addon:IsBreakdownDeal(buyout, expectedValue, threshold) then
+					local key = format("%d:%d", count, buyout)
+					local auction = result.auctions[key]
+					if auction then
+						auction.numAuctions = auction.numAuctions + numAuctions
+					else
+						result.auctions[key] = {
+							count = count,
+							buyout = buyout,
+							numAuctions = numAuctions,
+						}
+					end
+				end
+			end
+		end
+	end
+
+	return next(result.auctions) and result or nil
+end
+
+local function ProcessScanWorker()
+	local context = processingContext
+	if not context then
+		return
+	end
+	local scanDB = context.scanDB
+	local scanStats = context.scanStats
+	local oldDB = context.oldDB
+	local itemIDs = context.itemIDs
+	local scanItemIDs = context.scanItemIDs
+	local profile = addon.db.profile
+	local disenchantingThreshold = profile.disenchantingDealThreshold
+	local millingThreshold = profile.millingDealThreshold
+	local prospectingThreshold = profile.prospectingDealThreshold
+	local itemCount = #itemIDs
+	local result = {}
+	local vendorList = {}
+	local disenchantList = {}
+	local millingList = millingData and {} or nil
+	local prospectList = prospectingData and {} or nil
+	local scanTime = GetServerTime()
+	scanStats.lastScan = scanTime
+
+	LoadVendorItemData(scanDB)
+
+	for index = 1, itemCount do
+		local itemID = itemIDs[index]
+		local currentScanData = scanDB[itemID]
+		local itemData = ProcessItem(oldDB[itemID], currentScanData, scanTime)
+		if itemData then
+			result[itemID] = itemData
+		end
+		local vendorItem = BuildVendorItem(itemID, currentScanData)
+		if vendorItem then
+			vendorList[itemID] = vendorItem
+		end
+
+		processedItems = index
+		if index % ITEMS_PER_FRAME == 0 then
+			coroutineYield()
+		end
+	end
+
+	-- Breakdown values must use the complete newly processed price database;
+	-- calculating them during the first loop could miss a material processed later.
+	for index = 1, #scanItemIDs do
+		local itemID = scanItemIDs[index]
+		local disenchantItem = BuildDisenchantItem(itemID, scanDB[itemID], result,
+			disenchantingThreshold)
+		if disenchantItem then
+			disenchantList[itemID] = disenchantItem
+		end
+		if millingData and millingList then
+			local millingItem = BuildMaterialBreakdownItem(itemID, scanDB[itemID], result,
+				millingData, millingThreshold)
+			if millingItem then
+				millingList[itemID] = millingItem
+			end
+		end
+		if prospectingData and prospectList then
+			local prospectingItem = BuildMaterialBreakdownItem(itemID, scanDB[itemID], result,
+				prospectingData, prospectingThreshold)
+			if prospectingItem then
+				prospectList[itemID] = prospectingItem
+			end
+		end
+		processedItems = itemCount + index
+		if index % ITEMS_PER_FRAME == 0 then
+			coroutineYield()
+		end
+	end
+
+	return result, vendorList, disenchantList, millingList, prospectList
+end
+
+local function FinishProcessing(success, result, vendorList, disenchantList,
+		millingList, prospectList)
+	local context = processingContext
 	processingFrame:Hide()
 	worker = nil
-	completed = nil
+	processingContext = nil
+	if not context then
+		return
+	end
 
 	if success then
 		-- The live database changes only after the complete snapshot and its history
 		-- have been processed, so tooltips can never observe a half-updated scan.
-		addon.db[scope].auctionDB = result
-		addon.db[scope].auctionStats = scanStats
-		addon.db[scope].disenchantList = disenchantList
-		addon.db[scope].vendorList = vendorList
+		addon.db[context.scope].auctionDB = result
+		addon.db[context.scope].auctionStats = context.scanStats
+		addon.db[context.scope].disenchantList = disenchantList
+		if millingList then
+			addon.db[context.scope].millingList = millingList
+		end
+		if prospectList then
+			addon.db[context.scope].prospectList = prospectList
+		end
+		addon.db[context.scope].vendorList = vendorList
 		addon:FireAPIEvent("AUCTION_HOUSE_DATA_UPDATED",
-			addon:GetAuctionHouseTypeForScope(scope), "scan")
+			addon:GetAuctionHouseTypeForScope(context.scope), "scan")
 	end
 
-	if callback then
-		callback(success)
+	if context.callback then
+		context.callback(success, context.scope)
 	end
 end
 
 processingFrame:SetScript("OnUpdate", function()
 	local activeWorker = worker
-	local activeCompleted = completed
-	if not activeWorker or not activeCompleted then
+	if not activeWorker or not processingContext then
 		processingFrame:Hide()
 		worker = nil
-		completed = nil
+		processingContext = nil
 		return
 	end
 
-	local success, result, vendorList, disenchantList, scope, scanStats, callback = coroutineResume(activeWorker)
+	local success, result, vendorList, disenchantList, millingList, prospectList =
+		coroutineResume(activeWorker)
 	if not success then
 		geterrorhandler()(format(L["YAAHA auction data processing failed: %s"], tostring(result)))
-		FinishProcessing(false, nil, nil, nil, activeCompleted.scope, nil, activeCompleted.callback)
+		FinishProcessing(false)
 	elseif coroutineStatus(activeWorker) == "dead" then
-		FinishProcessing(true, result, vendorList, disenchantList, scope, scanStats, callback)
+		FinishProcessing(true, result, vendorList, disenchantList, millingList, prospectList)
 	end
 end)
 
@@ -519,50 +650,16 @@ function module:ProcessScan(scope, scanDB, scanStats, callback)
 
 	totalItems = #itemIDs + #scanItemIDs
 	processedItems = 0
-	completed = { scope = scope, callback = callback }
-	worker = coroutineCreate(function()
-		local result = {}
-		local vendorList = {}
-		local disenchantList = {}
-		local scanTime = GetServerTime()
-		scanStats.lastScan = scanTime
-
-		LoadVendorItemData(scanDB)
-
-		for index = 1, #itemIDs do
-			local itemID = itemIDs[index]
-			local currentScanData = scanDB[itemID]
-			local itemData = ProcessItem(oldDB[itemID], currentScanData, scanTime)
-			if itemData then
-				result[itemID] = itemData
-			end
-			local vendorItem = BuildVendorItem(itemID, currentScanData)
-			if vendorItem then
-				vendorList[itemID] = vendorItem
-			end
-
-			processedItems = index
-			if index % ITEMS_PER_FRAME == 0 then
-				coroutineYield()
-			end
-		end
-
-		-- Disenchant values must use the complete newly processed price database;
-		-- calculating them during the first loop could miss a material processed later.
-		for index = 1, #scanItemIDs do
-			local itemID = scanItemIDs[index]
-			local disenchantItem = BuildDisenchantItem(itemID, scanDB[itemID], result)
-			if disenchantItem then
-				disenchantList[itemID] = disenchantItem
-			end
-			processedItems = #itemIDs + index
-			if index % ITEMS_PER_FRAME == 0 then
-				coroutineYield()
-			end
-		end
-
-		return result, vendorList, disenchantList, scope, scanStats, callback
-	end)
+	processingContext = {
+		scope = scope,
+		scanDB = scanDB,
+		scanStats = scanStats,
+		callback = callback,
+		oldDB = oldDB,
+		itemIDs = itemIDs,
+		scanItemIDs = scanItemIDs,
+	}
+	worker = coroutineCreate(ProcessScanWorker)
 
 	processingFrame:Show()
 	return true

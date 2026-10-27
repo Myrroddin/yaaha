@@ -4,6 +4,7 @@
 local C_Item = C_Item
 local LibStub = LibStub
 local max = math.max
+local pairs = pairs
 
 local COPPER_PER_GOLD = 10000
 
@@ -17,8 +18,16 @@ local SPARE_PARTS = 166846
 local SENTRY_FISH = 168262
 local RECYCLABLE_BUNDLE = 168258
 
+-- Community testing found one Expulsom per 6.5 scrapped bracers on average.
+-- https://www.wowhead.com/news/wow-economy-weekly-wrap-up-developer-q-a-goblin-crash-course-tailoring-deep-dive-289941?page=6
+-- https://www.youtube.com/watch?v=eT-ZWzksycI&t=7s
 local AVERAGE_EXPULSOM_SCRAPS = 6.5
+-- Two 100-bundle samples yielded 12,463 and 12,454 Spare Parts respectively.
+-- The same observation supplies the coproduct averages used below.
+-- https://www.wowhead.com/item=168258/bundle-of-recyclable-parts#comments
 local AVERAGE_SPARE_PARTS_PER_BUNDLE = 124.585
+-- Each Sentry Fish produces two or three Spare Parts, for an expected 2.5.
+-- https://www.wowhead.com/item=168262/sentry-fish#comments
 local AVERAGE_SPARE_PARTS_PER_FISH = 2.5
 -- In Mists Classic, one Mote costs 400 Honor, and Blizzard values excess Honor
 -- at 35 silver per point: 400 * 35s = 140g.
@@ -133,6 +142,8 @@ local harmonyOutputs = {
 	{ itemID = 79101, quantity = 20 }, -- Prismatic Scale
 }
 
+-- One Spirit buys the quantities below from the Spirit of Harmony vendor.
+-- https://www.wowhead.com/mop-classic/item=76061/spirit-of-harmony#currency-for
 -- Pandaria Herbs is a random BoP container, not a selectable stack of one herb.
 -- Exclude it until its complete expected contents can be valued honestly.
 
@@ -197,6 +208,10 @@ local primalSpiritInputs = {
 	109129, -- Talador Orchid
 }
 
+-- Each rotating Garrison trader exchanges five of one listed reagent for one
+-- Primal Spirit. Average the independently complete paths because availability
+-- rotates and no one input is a dependable permanent minimum.
+-- https://www.wowhead.com/guide/garrisons/town-hall-daily-quests#profession-quests
 local function GetPrimalSpiritValue(resolver)
 	local paths = {}
 	for index = 1, #primalSpiritInputs do
@@ -209,6 +224,8 @@ local function GetPrimalSpiritValue(resolver)
 	} or nil
 end
 
+-- One Blood of Sargeras buys any one of the listed material bundles.
+-- https://www.wowhead.com/news/patch-7-1-ptr-preview-profession-and-blood-of-sargeras-updates-256536
 local bloodOfSargerasOutputs = {
 	{ itemID = 124101, quantity = 10 }, -- Aethril
 	{ itemID = 124102, quantity = 10 }, -- Dreamleaf
@@ -224,6 +241,9 @@ local bloodOfSargerasOutputs = {
 	{ itemID = 124441, quantity = 3 }, -- Leylight Shard
 }
 
+-- One Primal Sargerite buys any one bundle; gems cost ten Sargerite, hence the
+-- 0.1 quantity used to express their per-Sargerite opportunity value.
+-- https://www.wowhead.com/news/wow-economy-weekly-wrap-up-patch-7-3-2-rare-spawns-best-profession-mobile-armory-274959?page=4
 local primalSargeriteOutputs = {
 	{ itemID = 151565, quantity = 10 }, -- Astral Glory
 	{ itemID = 151564, quantity = 10 }, -- Empyrium
@@ -266,6 +286,9 @@ local expulsomInputs = {
 }
 
 local function GetExpulsomValue(resolver)
+	-- Average the complete cloth, leather, and mail bracer paths before applying
+	-- the observed scrap rate. A temporary cheapest path is not a stable expected
+	-- acquisition cost, and this custom value replaces the default material method.
 	local paths = {}
 	for index = 1, #expulsomInputs do
 		paths[index] = GetInputTotal(resolver, expulsomInputs[index])
@@ -283,8 +306,10 @@ local bundleInputs = {
 	{ itemID = 168215, quantity = 5 }, -- Machined Gear Assembly
 }
 
+-- A Bundle of Recyclable Parts requires exactly these three Mechagon components.
+-- https://www.wowhead.com/item=168258/bundle-of-recyclable-parts#comments
 local bundleCoproducts = {
-	-- Expected quantities from 200 observed Bundle of Recyclable Parts openings.
+	-- Expected quantities from the same 200 observed bundle openings cited above.
 	{ itemID = 166971, quantity = 1.17 }, -- Empty Energy Cell
 	{ itemID = 166970, quantity = 0.13 }, -- Energy Cell
 	{ itemID = 168327, quantity = 0.195 }, -- Chain Ignitercoil

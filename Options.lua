@@ -52,6 +52,7 @@ function addon:GetOptions()
 	if options then
 		return options
 	end
+	local vendorFlipTracking = addon:GetModule("VendorFlipTracking")
 
 	options = {
 		order = 10,
@@ -104,7 +105,7 @@ function addon:GetOptions()
 						end,
 						set = function(_, value)
 							addon.db.profile.coinDisplayStyle = value
-							addon:GetModule("VendorFlipTracking"):RefreshDisplay()
+							vendorFlipTracking:RefreshDisplay()
 						end
 					},
 					numDecimals = {
@@ -150,7 +151,7 @@ function addon:GetOptions()
 						end,
 						set = function(_, value)
 							addon.db.profile.formatLargeNumbers = value
-							addon:GetModule("VendorFlipTracking"):RefreshDisplay()
+							vendorFlipTracking:RefreshDisplay()
 						end
 					},
 					includeBreakEvenVendorDeals = {
@@ -173,8 +174,8 @@ function addon:GetOptions()
 						width = "relative",
 						relWidth = 0.5,
 						name = function()
-							local tracker = addon:GetModule("VendorFlipTracking")
-							return format(L["Vendor flip profit: %s"], tracker:GetFormattedProfit())
+							return format(L["Vendor flip profit: %s"],
+								vendorFlipTracking:GetFormattedProfit())
 						end
 					},
 					reset = {
@@ -185,7 +186,7 @@ function addon:GetOptions()
 						name = L["Reset vendor flip profit"],
 						confirm = L["Reset vendor flip profit and its outstanding item quantities?"],
 						func = function()
-							addon:GetModule("VendorFlipTracking"):Reset()
+							vendorFlipTracking:Reset()
 						end
 					},
 					disenchantingDealThreshold = {

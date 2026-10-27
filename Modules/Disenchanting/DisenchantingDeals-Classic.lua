@@ -1,4 +1,5 @@
--- Finds and purchases Classic auction listings whose disenchanting value covers their buyout.
+-- Finds and purchases complete Classic noncommodity listings at or below the
+-- configured fraction of their expected disenchanting value.
 
 local BUYOUT = BUYOUT
 local CanSendAuctionQuery = CanSendAuctionQuery
@@ -13,10 +14,12 @@ local GetAuctionItemLink = GetAuctionItemLink
 local GetMoney = GetMoney
 local GetNumAuctionItems = GetNumAuctionItems
 local GetTime = GetTime
+local ipairs = ipairs
 local LibStub = LibStub
 local pairs = pairs
 local PlaceAuctionBid = PlaceAuctionBid
 local QueryAuctionItems = QueryAuctionItems
+local RENOWN_LEVEL_UP_SKIP_BUTTON = RENOWN_LEVEL_UP_SKIP_BUTTON
 local sort = table.sort
 local StaticPopupDialogs = StaticPopupDialogs
 local StaticPopup_Hide = StaticPopup_Hide
@@ -41,6 +44,8 @@ local TRANSACTION_TIMEOUT = 10
 
 local actionButton, statusText
 local currentCandidate, currentPage, currentRequest, nextResultIndex
+local pendingBidsByItem
+local pendingListingIndex, pendingListingItemID, pendingListingPage
 local pendingPurchase
 local queue, queueIndex
 
@@ -48,8 +53,9 @@ local function SortByProfit(left, right)
 	return left.profit > right.profit
 end
 local resumePage, running, searchPending, transactionListUpdated, transactionPending
-local waitingForItemInfo, waitingForPurchaseRefresh, waitingForResults
-local queryAttempts = 0
+local waitingForItemInfo, waitingForPurchaseRefresh, waitingForRequestItemInfo, waitingForResults
+local listingItemInfoAttempts, queryAttempts, requestItemInfoAttempts = 0, 0, 0
+local searchListUpdated
 local searchDeadline, transactionDeadline
 local statusElapsed = 0
 local wasScannerBusy
@@ -64,6 +70,13 @@ local function SetStatus(text)
 	if statusText then
 		statusText:SetText(text)
 	end
+end
+
+local function ClearPendingListing()
+	pendingListingIndex = nil
+	pendingListingItemID = nil
+	pendingListingPage = nil
+	listingItemInfoAttempts = 0
 end
 
 local function GetCacheCounts()
@@ -96,15 +109,18 @@ end
 
 local function ScheduleSearch()
 	searchPending = true
+	searchListUpdated = false
 	waitingForItemInfo = false
+	waitingForRequestItemInfo = false
 	waitingForResults = false
 	searchDeadline = GetTime() + QUERY_TIMEOUT
 end
 
 local function ReadListing(index)
-	local name, _, count, _, _, _, _, _, _, buyout, _, _, _, owner, ownerFullName, _, itemID, hasAllInfo = GetAuctionItemInfo("list", index)
+	local name, _, count, _, _, _, _, minBid, _, buyout, bidAmount, highBidder,
+		bidderFullName, owner, ownerFullName, _, itemID, hasAllInfo = GetAuctionItemInfo("list", index)
 	if hasAllInfo == false then
-		return nil, true
+		return nil, true, itemID
 	end
 	if not itemID or not count or count < 1 or not buyout or buyout <= 0 then
 		return
@@ -115,7 +131,11 @@ local function ReadListing(index)
 		name = name,
 		link = GetAuctionItemLink("list", index),
 		count = count,
+		minBid = minBid,
 		buyout = buyout,
+		bidAmount = bidAmount,
+		highBidder = highBidder,
+		bidderFullName = bidderFullName,
 		owner = owner,
 		ownerFullName = ownerFullName,
 	}
@@ -124,6 +144,8 @@ end
 local function MatchesRequest(listing, request)
 	return listing.itemID == request.itemID
 		and not addon:IsPlayerAuction(listing.owner, listing.ownerFullName)
+		and not saleCollector:IsClassicAccountHighBidder(
+			listing, pendingBidsByItem and pendingBidsByItem[listing.itemID])
 end
 
 local function FinishSearch(message)
@@ -131,21 +153,64 @@ local function FinishSearch(message)
 	searchPending = false
 	transactionPending = false
 	waitingForItemInfo = false
+	waitingForRequestItemInfo = false
 	waitingForResults = false
 	resumePage = false
+	searchListUpdated = false
 	transactionListUpdated = false
 	waitingForPurchaseRefresh = false
 	queryAttempts = 0
+	requestItemInfoAttempts = 0
+	ClearPendingListing()
 	searchDeadline = nil
 	transactionDeadline = nil
 	currentCandidate = nil
 	currentRequest = nil
+	pendingBidsByItem = nil
 	queue = nil
 	if actionButton then
 		actionButton:SetText(L["Disenchanting Deals"])
 		actionButton:Enable()
 	end
 	SetStatus(message)
+end
+
+local function BeginRequest(request, name)
+	ClearPendingListing()
+	request.name = name
+	currentRequest = request
+	currentPage = 0
+	nextResultIndex = 1
+	queryAttempts = 0
+	requestItemInfoAttempts = 0
+	waitingForRequestItemInfo = false
+	ScheduleSearch()
+end
+
+local function RetryOrSkipPendingListing()
+	waitingForItemInfo = false
+	if listingItemInfoAttempts < QUERY_RETRY_LIMIT then
+		listingItemInfoAttempts = listingItemInfoAttempts + 1
+		if pendingListingItemID then
+			C_Item.RequestLoadItemDataByID(pendingListingItemID)
+		end
+		ScheduleSearch()
+		return
+	end
+
+	local skippedIndex = pendingListingIndex or nextResultIndex
+	ClearPendingListing()
+	nextResultIndex = skippedIndex + 1
+	SetStatus(L["Auction listing data unavailable; skipping."])
+	module:ProcessCurrentPage()
+end
+
+local function WaitForRequestItemInfo(request)
+	currentRequest = request
+	waitingForRequestItemInfo = true
+	requestItemInfoAttempts = requestItemInfoAttempts + 1
+	searchDeadline = GetTime() + QUERY_TIMEOUT
+	C_Item.RequestLoadItemDataByID(request.itemID)
 end
 
 local function AdvanceRequest()
@@ -156,15 +221,14 @@ local function AdvanceRequest()
 		local request = queue[queueIndex]
 		local name = C_Item.GetItemInfo(request.itemID)
 		if name then
-			request.name = name
-			currentRequest = request
-			currentPage = 0
-			nextResultIndex = 1
-			queryAttempts = 0
-			ScheduleSearch()
+			BeginRequest(request, name)
 			return
 		end
-		queueIndex = queueIndex + 1
+		-- A cold item cache is not evidence that the cached auction candidate is
+		-- invalid. Request its name and resume this same entry when Blizzard supplies it.
+		requestItemInfoAttempts = 0
+		WaitForRequestItemInfo(request)
+		return
 	end
 	FinishSearch(L["Disenchanting deal search complete."])
 end
@@ -172,6 +236,8 @@ end
 local function ContinueAfterCandidate(requery)
 	currentCandidate = nil
 	if requery then
+		-- A failed or changed row may have reordered the result set. Restart the
+		-- focused item query rather than resuming from a stale page cursor.
 		currentPage = 0
 		nextResultIndex = 1
 		ScheduleSearch()
@@ -191,6 +257,8 @@ local function ResolveTransaction(succeeded, confirmedFailure)
 		SetStatus(L["Auction action accepted; refreshing results."])
 		-- A purchased auction disappears and the next row moves into its index.
 		-- Continue on the refreshed page at that index rather than re-querying it.
+		-- Buying removes this row and shifts the following listing into its index.
+		-- Resume at the same index after the refreshed page arrives.
 		nextResultIndex = currentCandidate.index
 		currentCandidate = nil
 		if transactionListUpdated then
@@ -259,12 +327,27 @@ function module:ProcessCurrentPage()
 	end
 	local numResults, totalResults = GetNumAuctionItems("list")
 	for index = nextResultIndex, numResults do
-		local listing, itemInfoPending = ReadListing(index)
+		local listing, itemInfoPending, pendingItemID = ReadListing(index)
 		if itemInfoPending then
+			-- Keep the exact row pending while Classic resolves its item data, but do
+			-- not let one permanently incomplete result block every later candidate.
+			if pendingListingPage ~= currentPage or pendingListingIndex ~= index
+				or pendingListingItemID ~= pendingItemID then
+				pendingListingPage = currentPage
+				pendingListingIndex = index
+				pendingListingItemID = pendingItemID
+				listingItemInfoAttempts = 1
+				searchDeadline = GetTime() + QUERY_TIMEOUT
+				if pendingItemID then
+					C_Item.RequestLoadItemDataByID(pendingItemID)
+				end
+			end
 			nextResultIndex = index
 			waitingForItemInfo = true
-			searchDeadline = GetTime() + QUERY_TIMEOUT
 			return
+		end
+		if pendingListingPage == currentPage and pendingListingIndex == index then
+			ClearPendingListing()
 		end
 		if listing and MatchesRequest(listing, currentRequest) then
 			nextResultIndex = index + 1
@@ -291,6 +374,25 @@ local function ResultsMatchCurrentRequest()
 		end
 	end
 	return true
+end
+
+local function ConsumeSearchResults()
+	if not running or not waitingForResults or not searchListUpdated or not CanSendAuctionQuery() then
+		return
+	end
+
+	searchListUpdated = false
+	if not ResultsMatchCurrentRequest() then
+		waitingForResults = false
+		ScheduleSearch()
+		return
+	end
+
+	waitingForResults = false
+	waitingForItemInfo = false
+	queryAttempts = 0
+	nextResultIndex = 1
+	module:ProcessCurrentPage()
 end
 
 local function BuildQueue(disenchantList, scope)
@@ -322,6 +424,21 @@ local function BuildQueue(disenchantList, scope)
 	return requests
 end
 
+local function CachePendingBids(scope)
+	pendingBidsByItem = {}
+	if not scope then
+		return
+	end
+	for _, purchase in ipairs(saleCollector:GetPendingBids(scope, true)) do
+		local bids = pendingBidsByItem[purchase.itemID]
+		if not bids then
+			bids = {}
+			pendingBidsByItem[purchase.itemID] = bids
+		end
+		bids[#bids + 1] = purchase
+	end
+end
+
 local function StopSearch(message)
 	StaticPopup_Hide(POPUP_NAME)
 	FinishSearch(message or L["Disenchanting deal search stopped."])
@@ -338,6 +455,7 @@ local function StartSearch()
 	end
 	local scope = scanner:GetAuctionScope()
 	local disenchantList = scope and addon.db[scope].disenchantList
+	CachePendingBids(scope)
 	queue = BuildQueue(disenchantList, scope)
 	if #queue == 0 then
 		local scanStats = scope and addon.db[scope].auctionStats
@@ -362,8 +480,11 @@ local function StartSearch()
 	transactionPending = false
 	waitingForItemInfo = false
 	waitingForPurchaseRefresh = false
+	waitingForRequestItemInfo = false
 	waitingForResults = false
 	queryAttempts = 0
+	requestItemInfoAttempts = 0
+	searchListUpdated = false
 	searchDeadline = nil
 	transactionDeadline = nil
 	actionButton:SetText(L["Stop Disenchanting Deals"])
@@ -392,7 +513,7 @@ end
 StaticPopupDialogs[POPUP_NAME] = {
 	text = "%s",
 	button1 = BUYOUT,
-	button2 = L["Skip"],
+	button2 = RENOWN_LEVEL_UP_SKIP_BUTTON,
 	OnAccept = function(_, data)
 		module:BuyCandidate(data)
 	end,
@@ -408,6 +529,8 @@ function module:BuyCandidate(candidate)
 	if not running or transactionPending or candidate ~= currentCandidate then
 		return
 	end
+	-- Re-read the live row and expected materials inside the protected click. The
+	-- popup can outlive its cached price, owner, or disenchant value.
 	local listing = ReadListing(candidate.index)
 	local scope = scanner:GetAuctionScope()
 	local disenchant = listing and scope and disenchantingData:GetValue(listing.itemID, scope)
@@ -495,10 +618,22 @@ function module:OnEnable()
 			resumePage = false
 			module:ProcessCurrentPage()
 		end
-		if running and not transactionPending and searchPending and not waitingForResults then
+		if running and waitingForResults and searchListUpdated then
+			ConsumeSearchResults()
+		end
+		if running and waitingForRequestItemInfo and GetTime() >= searchDeadline then
+			if requestItemInfoAttempts < QUERY_RETRY_LIMIT then
+				WaitForRequestItemInfo(currentRequest)
+			else
+				waitingForRequestItemInfo = false
+				requestItemInfoAttempts = 0
+				AdvanceRequest()
+			end
+		elseif running and not transactionPending and searchPending and not waitingForResults then
 			local canQuery = CanSendAuctionQuery()
 			if canQuery then
 				searchPending = false
+				searchListUpdated = false
 				waitingForResults = true
 				queryAttempts = queryAttempts + 1
 				searchDeadline = GetTime() + QUERY_TIMEOUT
@@ -508,8 +643,7 @@ function module:OnEnable()
 				ScheduleSearch()
 			end
 		elseif running and waitingForItemInfo and GetTime() >= searchDeadline then
-			waitingForItemInfo = false
-			ScheduleSearch()
+			RetryOrSkipPendingListing()
 		elseif running and waitingForResults and GetTime() >= searchDeadline then
 			waitingForResults = false
 			if queryAttempts < QUERY_RETRY_LIMIT then
@@ -554,27 +688,38 @@ function module:AUCTION_ITEM_LIST_UPDATE()
 		self:ProcessCurrentPage()
 		return
 	end
-	if running and (waitingForResults or waitingForItemInfo) then
+	if running and waitingForResults then
 		-- This payload-free event is shared with sorting and other addons' searches.
-		-- Ignore pages which do not belong to YAAHA's outstanding exact-name query.
-		if waitingForResults and not ResultsMatchCurrentRequest() then
-			waitingForResults = false
-			ScheduleSearch()
-			return
-		end
-		local receivedNewPage = waitingForResults
-		waitingForResults = false
+		-- Auctioneer likewise waits for both this event and query-throttle readiness;
+		-- the event can arrive before Classic has finished publishing the result page.
+		searchListUpdated = true
+		ConsumeSearchResults()
+		return
+	elseif running and waitingForItemInfo then
 		waitingForItemInfo = false
-		queryAttempts = 0
-		if receivedNewPage then
-			nextResultIndex = 1
-		end
 		self:ProcessCurrentPage()
 	end
 end
 
-function module:GET_ITEM_INFO_RECEIVED()
-	if running and waitingForItemInfo then
+function module:GET_ITEM_INFO_RECEIVED(_, itemID, success)
+	if running and waitingForRequestItemInfo and currentRequest and itemID == currentRequest.itemID then
+		local name = C_Item.GetItemInfo(itemID)
+		if name then
+			BeginRequest(currentRequest, name)
+		elseif success == false and requestItemInfoAttempts >= QUERY_RETRY_LIMIT then
+			waitingForRequestItemInfo = false
+			requestItemInfoAttempts = 0
+			AdvanceRequest()
+		elseif success == false then
+			WaitForRequestItemInfo(currentRequest)
+		end
+		return
+	end
+	if running and waitingForItemInfo and pendingListingItemID == itemID then
+		if success == false then
+			RetryOrSkipPendingListing()
+			return
+		end
 		waitingForItemInfo = false
 		self:ProcessCurrentPage()
 	end

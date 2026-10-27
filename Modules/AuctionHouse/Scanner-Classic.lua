@@ -10,6 +10,7 @@ local GetAuctionItemInfo = GetAuctionItemInfo
 local GetNumAuctionItems = GetNumAuctionItems
 local GetServerTime = GetServerTime
 local GetTime = GetTime
+local hooksecurefunc = hooksecurefunc
 local LibStub = LibStub
 local pairs = pairs
 local QueryAuctionItems = QueryAuctionItems
@@ -70,9 +71,13 @@ local auctioneerFactions = {
 	[35607]	= "Horde",		-- Reginald Arcfire
 }
 
-local scanButton, auctionScope, scanScope, scanning, lastFullScan
+local scanButton, auctionScope, scanScope, scanning, scanDeadline, lastFullScan
+local externalFullScanObserved, legacyResultsReadyAt, replicatedScanStartedAt
+local lastReplicateCount
 local UpdateScanButton
 local FULL_SCAN_COOLDOWN = 15 * 60
+local SCAN_RESPONSE_TIMEOUT = 15
+local REPLICATE_PROGRESS_TIMEOUT = 30
 
 local function GetNPCID()
 	local guid = UnitGUID("npc")
@@ -182,6 +187,18 @@ local function AddAuction(auctionDB, itemID, count, minBid, minIncrement, buyout
 	byBid[unitBuyout] = (byBid[unitBuyout] or 0) + 1
 end
 
+local function OnScanProcessed(success, scope)
+	scanning = false
+	scanScope = nil
+	UpdateScanButton()
+	if success then
+		module:SendMessage("YAAHA_SCAN_PROCESSED", scope)
+	end
+	-- Notify dependent UI immediately. Waiting for its periodic state check leaves
+	-- a brief interval where the cache is ready but the Deals button ignores a click.
+	module:SendMessage("YAAHA_VENDOR_CACHE_READY", scope)
+end
+
 ---@param numListings number
 local function FinishScan(auctionDB, numListings)
 	local numItems = 0
@@ -197,17 +214,7 @@ local function FinishScan(auctionDB, numListings)
 	local started = dataProcessing:ProcessScan(scope, auctionDB, {
 		totalItems = numItems,
 		totalListings = numListings,
-	}, function(success)
-		scanning = false
-		scanScope = nil
-		UpdateScanButton()
-		if success then
-			module:SendMessage("YAAHA_SCAN_PROCESSED", scope)
-		end
-		-- Notify dependent UI immediately. Waiting for its periodic state check leaves
-		-- a brief interval where the cache is ready but the Deals button ignores a click.
-		module:SendMessage("YAAHA_VENDOR_CACHE_READY", scope)
-	end)
+	}, OnScanProcessed)
 	if not started then
 		scanning = false
 		scanScope = nil
@@ -265,6 +272,40 @@ end
 local function SaveCooldownStart()
 	lastFullScan = GetTime()
 	addon.db.char.fullScanCooldownExpires = GetServerTime() + FULL_SCAN_COOLDOWN
+end
+
+local function BeginScan(scope)
+	if scanning or not scope or dataProcessing:IsProcessing() then
+		return false
+	end
+
+	scanScope = scope
+	scanning = true
+	scanDeadline = GetTime() + SCAN_RESPONSE_TIMEOUT
+	if scanButton then
+		scanButton:Disable()
+	end
+	auctionHouseUI:SetScanStatus(L["Scanning auction house..."])
+	return true
+end
+
+local function ObserveLegacyFullScan(_, _, _, _, _, _, getAll)
+	-- Classic page and item searches are incomplete snapshots. Only adopt the
+	-- explicit getAll request used by YAAHA, Zygor, Auctioneer, and similar scanners.
+	if getAll then
+		externalFullScanObserved = true
+		scanDeadline = GetTime() + SCAN_RESPONSE_TIMEOUT
+		BeginScan(auctionScope)
+	end
+end
+
+local function ObserveReplicatedScan()
+	-- Wrath uses the replicated full-market API. The response event is unique to
+	-- that operation, so YAAHA can safely share a scan initiated by another addon.
+	if BeginScan(auctionScope) then
+		replicatedScanStartedAt = GetTime()
+		lastReplicateCount = 0
+	end
 end
 
 local function RestoreCooldown()
@@ -328,16 +369,13 @@ local function StartScan()
 		return
 	end
 
-	scanScope = auctionScope
-	if not scanScope then
+	if not BeginScan(auctionScope) then
 		return
 	end
 
-	scanning = true
-	scanButton:Disable()
-	auctionHouseUI:SetScanStatus(L["Scanning auction house..."])
-
 	if isWrath then
+		replicatedScanStartedAt = GetTime()
+		lastReplicateCount = 0
 		StartReplicatedScan()
 	else
 		QueryAuctionItems("", nil, nil, 0, false, nil, true, false, nil)
@@ -412,6 +450,7 @@ function module:OnEnable()
 	self:RegisterEvent("AUCTION_HOUSE_SHOW")
 	self:RegisterEvent("AUCTION_HOUSE_CLOSED")
 	self:RegisterEvent("AUCTION_ITEM_LIST_UPDATE")
+	self:RegisterEvent("PLAYER_ENTERING_WORLD")
 	if isWrath then
 		self:RegisterEvent("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
 		self:RegisterEvent("REPLICATE_ITEM_LIST_UPDATE")
@@ -423,12 +462,20 @@ function module:AUCTION_HOUSE_SHOW()
 	RestoreCooldown()
 	auctionHouseUI:SetAuctionScope(auctionScope)
 	CreateScanButton()
+	if externalFullScanObserved and not scanning then
+		BeginScan(auctionScope)
+	end
 end
 
 function module:AUCTION_HOUSE_CLOSED()
 	scanning = false
 	auctionScope = nil
 	scanScope = nil
+	scanDeadline = nil
+	externalFullScanObserved = nil
+	legacyResultsReadyAt = nil
+	replicatedScanStartedAt = nil
+	lastReplicateCount = nil
 
 	if scanButton then
 		scanButton:Hide()
@@ -436,22 +483,43 @@ function module:AUCTION_HOUSE_CLOSED()
 end
 
 function module:AUCTION_ITEM_LIST_UPDATE()
+	if not scanning and externalFullScanObserved then
+		BeginScan(auctionScope)
+	end
 	if scanning and not isWrath then
-		-- Ignore duplicate result notifications while coroutine processing is active.
-		SaveCooldownStart()
-		scanning = false
-		ReadLegacyAuctions()
+		-- Full scans may emit an immediate empty notification followed by the real
+		-- data. Wait until the next frame after the latest notification before reading.
+		legacyResultsReadyAt = GetTime()
 	end
 end
 
 function module:REPLICATE_ITEM_LIST_UPDATE()
+	-- ReplicateItems clears the old snapshot immediately and can announce that
+	-- empty state in the request frame. Wait for the later completion event.
+	if replicatedScanStartedAt == GetTime() then
+		return
+	end
 	if scanning and ReadReplicatedAuctions then
 		-- Start the cooldown when Blizzard confirms a successful response, not when
 		-- the request is sent. This prevents network delay from shortening the wait.
 		SaveCooldownStart()
 		scanning = false
+		scanDeadline = nil
+		replicatedScanStartedAt = nil
+		lastReplicateCount = nil
 		ReadReplicatedAuctions()
 	end
+end
+
+function module:PLAYER_ENTERING_WORLD()
+	-- Install after every addon has loaded so a later global wrapper cannot replace
+	-- this observer. Post-hooks do not alter or delay the initiating addon's scan.
+	if isWrath then
+		hooksecurefunc(C_AuctionHouse, "ReplicateItems", ObserveReplicatedScan)
+	else
+		hooksecurefunc("QueryAuctionItems", ObserveLegacyFullScan)
+	end
+	self:UnregisterEvent("PLAYER_ENTERING_WORLD")
 end
 
 function module:AUCTION_HOUSE_THROTTLED_SYSTEM_READY()
@@ -469,3 +537,38 @@ end
 function module:IsScanning()
 	return scanning or dataProcessing:IsProcessing()
 end
+
+local scanWatchdog = CreateFrame("Frame")
+scanWatchdog:SetScript("OnUpdate", function()
+	if scanning and isWrath and replicatedScanStartedAt then
+		-- TODO: Recheck after WoWLua-LS updates. This branch runs only on Wrath,
+		-- where Blizzard provides the replicated-auction API.
+		---@diagnostic disable-next-line: wrong-flavor-api
+		local replicateCount = C_AuctionHouse.GetNumReplicateItems()
+		if replicateCount > (lastReplicateCount or 0) then
+			lastReplicateCount = replicateCount
+			scanDeadline = GetTime() + REPLICATE_PROGRESS_TIMEOUT
+		end
+	end
+	if scanning and legacyResultsReadyAt and GetTime() > legacyResultsReadyAt then
+		legacyResultsReadyAt = nil
+		SaveCooldownStart()
+		scanning = false
+		scanDeadline = nil
+		externalFullScanObserved = nil
+		ReadLegacyAuctions()
+	elseif (scanning or externalFullScanObserved) and scanDeadline
+		and GetTime() >= scanDeadline then
+		-- A failed external request must not leave YAAHA permanently busy. The
+		-- cooldown begins only after Blizzard delivers the corresponding response.
+		scanning = false
+		scanScope = nil
+		scanDeadline = nil
+		externalFullScanObserved = nil
+		legacyResultsReadyAt = nil
+		replicatedScanStartedAt = nil
+		lastReplicateCount = nil
+		auctionHouseUI:SetScanStatus(L["Scan unavailable."])
+		UpdateScanButton()
+	end
+end)

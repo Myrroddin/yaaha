@@ -1,6 +1,7 @@
 -- Loads Mists and Standard deterministic conversion definitions into ConvertData.
 
 local LibStub = LibStub
+local pairs = pairs
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local isStandard = addon.isStandard

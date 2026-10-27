@@ -1,4 +1,5 @@
--- Finds and presents Classic auction listings that can be resold to NPC vendors for profit.
+-- Finds and presents complete Classic auction stacks whose bid or buyout does
+-- not exceed their NPC value under the configured break-even policy.
 
 local BID = BID
 local BUYOUT = BUYOUT
@@ -21,6 +22,7 @@ local LibStub = LibStub
 local pairs = pairs
 local PlaceAuctionBid = PlaceAuctionBid
 local QueryAuctionItems = QueryAuctionItems
+local RENOWN_LEVEL_UP_SKIP_BUTTON = RENOWN_LEVEL_UP_SKIP_BUTTON
 local sort = table.sort
 local StaticPopupDialogs = StaticPopupDialogs
 local StaticPopup_Hide = StaticPopup_Hide
@@ -46,18 +48,21 @@ local RED_NUMBER = addon.negativeNumberColor
 local actionButton, restartButton, statusText
 local AdvanceRequest, ContinueAfterCandidate
 local currentCandidate, currentPage, currentRequest, nextResultIndex
+local pendingListingIndex, pendingListingItemID, pendingListingPage
 local pendingPurchase
 local queue, queueIndex
 
 local function SortByBestProfit(left, right)
 	return left.bestProfit > right.bestProfit
 end
-local running, searchPending, transactionPending, waitingForItemInfo, waitingForResults
+local running, searchPending, transactionPending, waitingForItemInfo, waitingForRequestItemInfo, waitingForResults
 local resumePage, transactionListUpdated, waitingForPurchaseRefresh
-local queryAttempts = 0
+local listingItemInfoAttempts, queryAttempts, requestItemInfoAttempts = 0, 0, 0
+local searchListUpdated
 local searchDeadline, transactionDeadline
 local statusElapsed = 0
 local highBidderNotices
+local pendingVendorBidsByItem
 local wasScannerBusy
 local updateFrame = CreateFrame("Frame")
 
@@ -65,6 +70,13 @@ local function SetStatus(text)
 	if statusText then
 		statusText:SetText(text)
 	end
+end
+
+local function ClearPendingListing()
+	pendingListingIndex = nil
+	pendingListingItemID = nil
+	pendingListingPage = nil
+	listingItemInfoAttempts = 0
 end
 
 local function GetVendorCacheCounts()
@@ -102,7 +114,9 @@ end
 
 local function ScheduleSearch()
 	searchPending = true
+	searchListUpdated = false
 	waitingForItemInfo = false
+	waitingForRequestItemInfo = false
 	waitingForResults = false
 	searchDeadline = GetTime() + QUERY_TIMEOUT
 end
@@ -113,7 +127,7 @@ local function ReadListing(index)
 	-- its item data. Advancing past such a row permanently skips a valid deal, so
 	-- distinguish "not loaded yet" from a genuinely unusable auction record.
 	if hasAllInfo == false then
-		return nil, true
+		return nil, true, itemID
 	end
 	if not itemID or not count or count < 1 or not minBid or minBid < 1
 		or not minIncrement or minIncrement < 0 or not bidAmount or bidAmount < 0
@@ -131,6 +145,7 @@ local function ReadListing(index)
 		minBid = minBid,
 		payableBid = payableBid,
 		buyout = buyout or 0,
+		bidAmount = bidAmount,
 		highBidder = highBidder,
 		bidderFullName = bidderFullName,
 		owner = owner,
@@ -139,13 +154,8 @@ local function ReadListing(index)
 end
 
 local function IsOwnHighBidder(listing)
-	local highBidder = listing.bidderFullName or listing.highBidder
-	if highBidder == true then
-		-- Some Classic clients expose this return as a boolean meaning the player is
-		-- currently winning rather than exposing the bidder's name.
-		return true
-	end
-	return highBidder and addon:IsAlt(highBidder) or false
+	local pendingBids = pendingVendorBidsByItem and pendingVendorBidsByItem[listing.itemID]
+	return saleCollector:IsClassicAccountHighBidder(listing, pendingBids)
 end
 
 local function MatchesRequest(listing, request)
@@ -158,17 +168,22 @@ local function FinishSearch(message)
 	searchPending = false
 	transactionPending = false
 	waitingForItemInfo = false
+	waitingForRequestItemInfo = false
 	waitingForResults = false
 	resumePage = false
+	searchListUpdated = false
 	transactionListUpdated = false
 	waitingForPurchaseRefresh = false
 	queryAttempts = 0
+	requestItemInfoAttempts = 0
+	ClearPendingListing()
 	searchDeadline = nil
 	transactionDeadline = nil
 	currentCandidate = nil
 	currentRequest = nil
 	queue = nil
 	highBidderNotices = nil
+	pendingVendorBidsByItem = nil
 	if actionButton then
 		actionButton:SetText(L["Start Vendor Flips"])
 		actionButton:Enable()
@@ -177,6 +192,44 @@ local function FinishSearch(message)
 		restartButton:Enable()
 	end
 	SetStatus(message)
+end
+
+local function BeginRequest(request, name)
+	ClearPendingListing()
+	request.name = name
+	currentRequest = request
+	currentPage = 0
+	nextResultIndex = 1
+	queryAttempts = 0
+	requestItemInfoAttempts = 0
+	waitingForRequestItemInfo = false
+	ScheduleSearch()
+end
+
+local function RetryOrSkipPendingListing()
+	waitingForItemInfo = false
+	if listingItemInfoAttempts < QUERY_RETRY_LIMIT then
+		listingItemInfoAttempts = listingItemInfoAttempts + 1
+		if pendingListingItemID then
+			C_Item.RequestLoadItemDataByID(pendingListingItemID)
+		end
+		ScheduleSearch()
+		return
+	end
+
+	local skippedIndex = pendingListingIndex or nextResultIndex
+	ClearPendingListing()
+	nextResultIndex = skippedIndex + 1
+	SetStatus(L["Auction listing data unavailable; skipping."])
+	module:ProcessCurrentPage()
+end
+
+local function WaitForRequestItemInfo(request)
+	currentRequest = request
+	waitingForRequestItemInfo = true
+	requestItemInfoAttempts = requestItemInfoAttempts + 1
+	searchDeadline = GetTime() + QUERY_TIMEOUT
+	C_Item.RequestLoadItemDataByID(request.itemID)
 end
 
 local function ResolveTransaction(succeeded, confirmedFailure)
@@ -228,15 +281,14 @@ function AdvanceRequest()
 		local request = queue[queueIndex]
 		local name = GetItemInfo(request.itemID)
 		if name then
-			request.name = name
-			currentRequest = request
-			currentPage = 0
-			nextResultIndex = 1
-			queryAttempts = 0
-			ScheduleSearch()
+			BeginRequest(request, name)
 			return
 		end
-		queueIndex = queueIndex + 1
+		-- A cold item cache is not evidence that the cached auction candidate is
+		-- invalid. Request its name and resume this same entry when Blizzard supplies it.
+		requestItemInfoAttempts = 0
+		WaitForRequestItemInfo(request)
+		return
 	end
 
 	FinishSearch(L["Vendor flip search complete."])
@@ -415,15 +467,28 @@ function module:ProcessCurrentPage()
 
 	local numResults, totalResults = GetNumAuctionItems("list")
 	for index = nextResultIndex, numResults do
-		local listing, itemInfoPending = ReadListing(index)
+		local listing, itemInfoPending, pendingItemID = ReadListing(index)
 		if itemInfoPending then
 			-- Resume at this exact row rather than restarting or advancing the item
-			-- request. GET_ITEM_INFO_RECEIVED normally wakes us; the existing query
-			-- deadline remains a safety net if the client never supplies the record.
+			-- request. A permanently incomplete row is retried only a bounded number
+			-- of times, then skipped so it cannot stall the entire deal search.
+			if pendingListingPage ~= currentPage or pendingListingIndex ~= index
+				or pendingListingItemID ~= pendingItemID then
+				pendingListingPage = currentPage
+				pendingListingIndex = index
+				pendingListingItemID = pendingItemID
+				listingItemInfoAttempts = 1
+				searchDeadline = GetTime() + QUERY_TIMEOUT
+				if pendingItemID then
+					C_Item.RequestLoadItemDataByID(pendingItemID)
+				end
+			end
 			nextResultIndex = index
 			waitingForItemInfo = true
-			searchDeadline = GetTime() + QUERY_TIMEOUT
 			return
+		end
+		if pendingListingPage == currentPage and pendingListingIndex == index then
+			ClearPendingListing()
 		end
 		if listing and MatchesRequest(listing, currentRequest) then
 			nextResultIndex = index + 1
@@ -454,6 +519,25 @@ local function ResultsMatchCurrentRequest()
 		end
 	end
 	return true
+end
+
+local function ConsumeSearchResults()
+	if not running or not waitingForResults or not searchListUpdated or not CanSendAuctionQuery() then
+		return
+	end
+
+	searchListUpdated = false
+	if not ResultsMatchCurrentRequest() then
+		waitingForResults = false
+		ScheduleSearch()
+		return
+	end
+
+	waitingForResults = false
+	waitingForItemInfo = false
+	queryAttempts = 0
+	nextResultIndex = 1
+	module:ProcessCurrentPage()
 end
 
 local function BuildQueue(vendorList, scope)
@@ -494,26 +578,38 @@ local function BuildQueue(vendorList, scope)
 		end
 	end
 
-	-- Pending vendor-flip bids survive cache rebuilds. Querying their exact live
-	-- listings ensures the high-bidder feedback covers earlier runs as well as the
-	-- current vendor cache. Records created before this tracking existed have no
-	-- action and are intentionally not guessed to be bids rather than buyouts.
-	for _, purchase in ipairs(saleCollector:GetPendingVendorBids(scope)) do
-		local bestProfit = purchase.vendorSell and purchase.vendorSell * purchase.count - purchase.price or 0
-		local request = requestsByItem[purchase.itemID]
-		if request then
-			request.vendorSell = request.vendorSell or purchase.vendorSell
-			if bestProfit > request.bestProfit then
-				request.bestProfit = bestProfit
+	-- Every known account bid protects its matching listing from an alt. The
+	-- vendor-flip subset also survives cache rebuilds so its exact live listings
+	-- can remain in this search's result queue. Records created before action
+	-- tracking existed are not guessed to be bids rather than buyouts.
+	local pendingBids = scope and saleCollector:GetPendingBids(scope, true) or {}
+	pendingVendorBidsByItem = {}
+	for _, purchase in ipairs(pendingBids) do
+		local itemBids = pendingVendorBidsByItem[purchase.itemID]
+		if not itemBids then
+			itemBids = {}
+			pendingVendorBidsByItem[purchase.itemID] = itemBids
+		end
+		itemBids[#itemBids + 1] = purchase
+
+		if purchase.vendorFlip then
+			local bestProfit = purchase.vendorSell
+				and purchase.vendorSell * purchase.count - purchase.price or 0
+			local request = requestsByItem[purchase.itemID]
+			if request then
+				request.vendorSell = request.vendorSell or purchase.vendorSell
+				if bestProfit > request.bestProfit then
+					request.bestProfit = bestProfit
+				end
+			else
+				request = {
+					itemID = purchase.itemID,
+					vendorSell = purchase.vendorSell,
+					bestProfit = bestProfit,
+				}
+				requestsByItem[purchase.itemID] = request
+				requests[#requests + 1] = request
 			end
-		else
-			request = {
-				itemID = purchase.itemID,
-				vendorSell = purchase.vendorSell,
-				bestProfit = bestProfit,
-			}
-			requestsByItem[purchase.itemID] = request
-			requests[#requests + 1] = request
 		end
 	end
 
@@ -568,8 +664,11 @@ local function StartVendorFlips()
 	transactionPending = false
 	waitingForItemInfo = false
 	waitingForPurchaseRefresh = false
+	waitingForRequestItemInfo = false
 	waitingForResults = false
 	queryAttempts = 0
+	requestItemInfoAttempts = 0
+	searchListUpdated = false
 	searchDeadline = nil
 	transactionDeadline = nil
 	actionButton:SetText(L["Stop Vendor Flips"])
@@ -613,7 +712,7 @@ StaticPopupDialogs[POPUP_NAME] = {
 	text = "%s",
 	button1 = BID,
 	button2 = BUYOUT,
-	button3 = L["Skip"],
+	button3 = RENOWN_LEVEL_UP_SKIP_BUTTON,
 	selectCallbackByIndex = true,
 	OnButton1 = function(_, data)
 		module:ActOnCandidate("bid", data)
@@ -683,10 +782,22 @@ function module:OnEnable()
 			resumePage = false
 			self:ProcessCurrentPage()
 		end
-		if running and not transactionPending and searchPending and not waitingForResults then
+		if running and waitingForResults and searchListUpdated then
+			ConsumeSearchResults()
+		end
+		if running and waitingForRequestItemInfo and GetTime() >= searchDeadline then
+			if requestItemInfoAttempts < QUERY_RETRY_LIMIT then
+				WaitForRequestItemInfo(currentRequest)
+			else
+				waitingForRequestItemInfo = false
+				requestItemInfoAttempts = 0
+				AdvanceRequest()
+			end
+		elseif running and not transactionPending and searchPending and not waitingForResults then
 			local canQuery = CanSendAuctionQuery()
 			if canQuery then
 				searchPending = false
+				searchListUpdated = false
 				waitingForResults = true
 				queryAttempts = queryAttempts + 1
 				searchDeadline = GetTime() + QUERY_TIMEOUT
@@ -697,10 +808,7 @@ function module:OnEnable()
 				ScheduleSearch()
 			end
 		elseif running and waitingForItemInfo and GetTime() >= searchDeadline then
-			-- Reissuing the exact search is safer than discarding the whole cached
-			-- request merely because one result row did not resolve promptly.
-			waitingForItemInfo = false
-			ScheduleSearch()
+			RetryOrSkipPendingListing()
 		elseif running and waitingForResults and GetTime() >= searchDeadline then
 			waitingForResults = false
 			if queryAttempts < QUERY_RETRY_LIMIT then
@@ -766,28 +874,38 @@ function module:AUCTION_ITEM_LIST_UPDATE()
 		self:ProcessCurrentPage()
 		return
 	end
-	if running and (waitingForResults or waitingForItemInfo) then
+	if running and waitingForResults then
 		-- AUCTION_ITEM_LIST_UPDATE has no query identifier and can also be fired by
-		-- sorting or another addon's search. Do not consume a foreign result page as
-		-- the answer to YAAHA's current request; doing so used to skip valid items.
-		if waitingForResults and not ResultsMatchCurrentRequest() then
-			waitingForResults = false
-			ScheduleSearch()
-			return
-		end
-		local receivedNewPage = waitingForResults
-		waitingForResults = false
+		-- sorting or another addon's search. Auctioneer likewise waits for both this
+		-- event and query-throttle readiness before treating the result page as final.
+		searchListUpdated = true
+		ConsumeSearchResults()
+		return
+	elseif running and waitingForItemInfo then
 		waitingForItemInfo = false
-		queryAttempts = 0
-		if receivedNewPage then
-			nextResultIndex = 1
-		end
 		self:ProcessCurrentPage()
 	end
 end
 
-function module:GET_ITEM_INFO_RECEIVED()
-	if running and waitingForItemInfo then
+function module:GET_ITEM_INFO_RECEIVED(_, itemID, success)
+	if running and waitingForRequestItemInfo and currentRequest and itemID == currentRequest.itemID then
+		local name = GetItemInfo(itemID)
+		if name then
+			BeginRequest(currentRequest, name)
+		elseif success == false and requestItemInfoAttempts >= QUERY_RETRY_LIMIT then
+			waitingForRequestItemInfo = false
+			requestItemInfoAttempts = 0
+			AdvanceRequest()
+		elseif success == false then
+			WaitForRequestItemInfo(currentRequest)
+		end
+		return
+	end
+	if running and waitingForItemInfo and pendingListingItemID == itemID then
+		if success == false then
+			RetryOrSkipPendingListing()
+			return
+		end
 		waitingForItemInfo = false
 		self:ProcessCurrentPage()
 	end

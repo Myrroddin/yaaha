@@ -35,12 +35,12 @@ local IsTradeSkillLinked = IsTradeSkillLinked
 local LibStub = LibStub
 local match = string.match
 local next = next
-local select = select
 local tonumber = tonumber
 local UNKNOWN = UNKNOWN
 
 local MINING_SPELL_ID = 2575
 local SMELTING_SPELL_ID = 2656
+local PROFESSION_SLOT_COUNT = 5
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local ALCHEMY_SKILL_LINE = addon.alchemySkillLineID
@@ -55,6 +55,9 @@ local scanningTradeSkill = false
 local tradeSkillScanPending = false
 local ignoreCraftUpdatesUntil = 0
 local ignoreTradeSkillUpdatesUntil = 0
+local craftScanAttempt = 1
+local tradeSkillScanAttempt = 1
+local professionSlots = {}
 
 local function GetSpellName(spellID)
 	local info = C_Spell.GetSpellInfo(spellID)
@@ -127,10 +130,11 @@ local function ResolveSkillLineName(name, skillLines)
 end
 
 local function GetProfessionIdentity(name)
-	local primary1, primary2 = GetProfessions()
-	local count = select("#", GetProfessions())
-	for slot = 1, count do
-		local professionIndex = select(slot, GetProfessions())
+	professionSlots[1], professionSlots[2], professionSlots[3],
+		professionSlots[4], professionSlots[5] = GetProfessions()
+	local primary1, primary2 = professionSlots[1], professionSlots[2]
+	for slot = 1, PROFESSION_SLOT_COUNT do
+		local professionIndex = professionSlots[slot]
 		if professionIndex then
 			local professionName, _, _, _, _, _, skillLineID =
 				GetProfessionInfo(professionIndex)
@@ -141,15 +145,17 @@ local function GetProfessionIdentity(name)
 	end
 end
 
+local function ShouldRemoveProfession(_, profession, skillLines)
+	return (not profession.collector or profession.collector == "classic")
+		and profession.skillLineName and not skillLines[profession.skillLineName]
+end
+
 local function ReconcileProfessions()
 	local skillLines = ReadSkillLines()
 	if not skillLines then
 		return
 	end
-	module:RemoveProfessions(function(_, profession)
-		return (not profession.collector or profession.collector == "classic")
-			and profession.skillLineName and not skillLines[profession.skillLineName]
-	end)
+	module:RemoveProfessions(ShouldRemoveProfession, skillLines)
 end
 
 local function ReadReagents(index, isCraft)
@@ -365,6 +371,20 @@ end
 
 local QueueTradeSkillScan, QueueCraftScan
 
+local function RunTradeSkillScan()
+	tradeSkillScanPending = false
+	if not ScanTradeSkill() and tradeSkillScanAttempt < 6 then
+		QueueTradeSkillScan(0.2, tradeSkillScanAttempt + 1)
+	end
+end
+
+local function RunCraftScan()
+	craftScanPending = false
+	if not ScanCraft() and craftScanAttempt < 6 then
+		QueueCraftScan(0.2, craftScanAttempt + 1)
+	end
+end
+
 -- A zero-second timer defers scanning until the next frame, after Blizzard
 -- finishes the current profession event. Bounded retries wait for missing data.
 QueueTradeSkillScan = function(delay, attempt)
@@ -372,13 +392,8 @@ QueueTradeSkillScan = function(delay, attempt)
 		return
 	end
 	tradeSkillScanPending = true
-	C_Timer.After(delay or 0, function()
-		tradeSkillScanPending = false
-		attempt = attempt or 1
-		if not ScanTradeSkill() and attempt < 6 then
-			QueueTradeSkillScan(0.2, attempt + 1)
-		end
-	end)
+	tradeSkillScanAttempt = attempt or 1
+	C_Timer.After(delay or 0, RunTradeSkillScan)
 end
 
 QueueCraftScan = function(delay, attempt)
@@ -386,13 +401,8 @@ QueueCraftScan = function(delay, attempt)
 		return
 	end
 	craftScanPending = true
-	C_Timer.After(delay or 0, function()
-		craftScanPending = false
-		attempt = attempt or 1
-		if not ScanCraft() and attempt < 6 then
-			QueueCraftScan(0.2, attempt + 1)
-		end
-	end)
+	craftScanAttempt = attempt or 1
+	C_Timer.After(delay or 0, RunCraftScan)
 end
 
 function module:GetCraftRecipeSpellID(index)

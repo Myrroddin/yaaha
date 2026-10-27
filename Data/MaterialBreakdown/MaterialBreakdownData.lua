@@ -35,6 +35,9 @@ end
 local methods = {}
 
 local function LearnedResultsAreValid(learned, allowed)
+	-- One invalid output invalidates the complete capture aggregate. Occurrence and
+	-- quantity totals share the same sample divisor, so individual rows cannot be
+	-- repaired or retained independently without changing their probabilities.
 	if type(learned) ~= "table" or type(learned.samples) ~= "number" or learned.samples <= 0
 		or learned.samples % 1 ~= 0 or type(learned.results) ~= "table" then
 		return false
@@ -136,6 +139,8 @@ function methods:GetResults(itemInfo)
 		return
 	end
 
+	-- Work on a copy because learned observations are a per-session projection;
+	-- the static client baseline must remain unchanged for later calls and syncs.
 	local results = CopyResults(definition.results)
 	local aggregate = { samples = 0, results = {} }
 	local saved = addon.db.global[self.variableConversionSavedKey]
@@ -168,6 +173,9 @@ function methods:GetResults(itemInfo)
 	end
 	local sampleCount = aggregate.samples
 	if sampleCount > 0 then
+		-- Blend observed successes and non-occurrences against the same denominator.
+		-- An attempt which did not yield a given material still lowers its chance and
+		-- expected quantity, even though that material has no row in the capture.
 		local divisor = STATIC_SAMPLE_WEIGHT + sampleCount
 		for index = 1, #results do
 			local result = results[index]
@@ -225,6 +233,8 @@ function methods:RecordObservation(itemInfo, loot)
 	for index = 1, #definition.results do
 		allowed[definition.results[index].itemID] = true
 	end
+	-- A collector capture is accepted only when every output belongs to this
+	-- source's baseline. Mixed or mispaired loot would poison every probability.
 	local hasResults = false
 	for materialID, quantity in pairs(loot) do
 		if not allowed[materialID] or quantity <= 0 then
@@ -282,6 +292,9 @@ function methods:GetValue(itemInfo, scope, priceDB)
 			total = total + result.expectedValue
 		end
 	end
+	-- Preserve each known output price for tooltip detail, but expose no aggregate
+	-- unless every possible output has a current value. Partial totals would make a
+	-- deal search or public API result look cheaper than the data supports.
 	breakdown.expectedValue = complete and total or nil
 	breakdown.expectedUnitValue = complete and total / breakdown.requiredQuantity or nil
 	breakdown.complete = complete
@@ -292,6 +305,9 @@ end
 ---@param savedKey "millingData"|"prospectData"
 ---@param definitions table<integer, table>
 function module:InitializeDataModule(target, savedKey, definitions)
+	-- Milling and prospecting share behavior but retain client-specific definition
+	-- tables and saved observation keys. Install one method set on both modules so
+	-- fixes to probability, validation, and pricing cannot drift apart.
 	local materials = {}
 	for _, definition in pairs(definitions) do
 		for index = 1, #definition.results do

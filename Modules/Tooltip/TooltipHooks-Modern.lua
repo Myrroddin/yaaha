@@ -18,16 +18,20 @@ local function OnTooltipSetItem(tooltip, data)
 	module:ProcessItemTooltip(tooltip, itemID, link, true)
 end
 
+local function OnTooltipCleared(tooltip)
+	module:ClearTooltipState(tooltip)
+end
+
+local function OnTooltipHidden(tooltip)
+	module:ClearTooltipDisplayState(tooltip)
+end
+
 function module:OnEnable()
 	local tooltips = self:GetTooltipFrames()
 	for index = 1, #tooltips do
 		local tooltip = tooltips[index]
-		tooltip:HookScript("OnTooltipCleared", function(activeTooltip)
-			module:ClearTooltipState(activeTooltip)
-		end)
-		tooltip:HookScript("OnHide", function(activeTooltip)
-			module:ClearTooltipDisplayState(activeTooltip)
-		end)
+		tooltip:HookScript("OnTooltipCleared", OnTooltipCleared)
+		tooltip:HookScript("OnHide", OnTooltipHidden)
 	end
 	TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, OnTooltipSetItem)
 end

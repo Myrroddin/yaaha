@@ -15,6 +15,7 @@ local GetInboxNumItems = GetInboxNumItems
 local GetNumAuctionItems = GetNumAuctionItems
 local GetServerTime = GetServerTime
 local hooksecurefunc = hooksecurefunc
+local ipairs = ipairs
 local LibStub = LibStub
 local max = math.max
 local min = math.min
@@ -24,6 +25,7 @@ local stringGsub = string.gsub
 local stringMatch = string.match
 local tableRemove = table.remove
 local type = type
+local UnitGUID = UnitGUID
 local wipe = wipe
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
@@ -39,10 +41,12 @@ local SALE_HISTORY_DAYS = addon.saleHistoryDays
 local SALE_HISTORY_SECONDS = addon.saleHistorySeconds
 local SALE_MATCH_SECONDS = 2 * 60 * 60
 local AUCTION_MAIL_LIFETIME_DAYS = 30
+local ACTIVE_AUCTION_SECONDS = 2 * SECONDS_PER_DAY
 local AUCTION_HOUSE_TYPES = addon.usesSharedAuctionHouse
 	and { "Shared" } or { "Alliance", "Horde", "Neutral" }
 local playerFullName
 local classicPurchaseHookClaim
+local modernPurchaseHookClaim
 local modernAuctions = {}
 local pendingCommodityPurchase
 local OUTBID_MAIL_PATTERN = AUCTION_OUTBID_MAIL_SUBJECT
@@ -97,6 +101,56 @@ local function ApplyInvoiceSeller(purchase, seller)
 	purchase.seller = seller
 	purchase.matchSeller = seller
 	return true
+end
+
+local function GetCharacterRealm(characterKey)
+	return type(characterKey) == "string" and stringMatch(characterKey, " %- (.+)$") or nil
+end
+
+local function GetRecordedAuctionHouseType(pending, scope)
+	for index = #pending, 1, -1 do
+		local purchase = pending[index]
+		if purchase.scope == scope and purchase.auctionHouseType then
+			return purchase.auctionHouseType
+		end
+	end
+end
+
+local function IsPendingBidFromCurrentMarket(purchase, characterKey, pending, scope,
+	marketKey, auctionHouseType, realmGroup)
+	if purchase.scope ~= scope then
+		return false
+	elseif characterKey == addon.db.keys.char then
+		return true
+	elseif purchase.realmGroup then
+		return purchase.realmGroup == realmGroup
+			and purchase.auctionHouseType == auctionHouseType
+	elseif purchase.marketKey then
+		return purchase.marketKey == marketKey
+	end
+
+	-- Records predating marketKey can still be used when the character belongs to
+	-- this realm and its newer records identify the same auction-house faction.
+	-- Fail closed when either identity is unknown rather than mixing separate markets.
+	if GetCharacterRealm(characterKey) ~= addon.db.keys.realm then
+		return false
+	end
+	local recordedType = purchase.auctionHouseType or GetRecordedAuctionHouseType(pending, scope)
+	return recordedType == auctionHouseType
+end
+
+local function AppendPendingBids(bids, pending, characterKey, scope, marketKey,
+	auctionHouseType, realmGroup, now)
+	for index = #pending, 1, -1 do
+		local purchase = pending[index]
+		if type(purchase.timestamp) == "number" and purchase.timestamp <= now
+			and now - purchase.timestamp < ACTIVE_AUCTION_SECONDS
+			and purchase.action == "bid"
+			and IsPendingBidFromCurrentMarket(purchase, characterKey, pending, scope,
+				marketKey, auctionHouseType, realmGroup) then
+			bids[#bids + 1] = purchase
+		end
+	end
 end
 
 local function ResolveListingAuctionHouseType(scope, listing)
@@ -649,37 +703,109 @@ local function CacheModernItemAuctions(_, itemKey)
 				buyout = result.buyoutAmount,
 				count = result.quantity,
 				itemID = itemKey.itemID,
+				minBid = result.minBid,
 			}
 		end
 	end
 end
 
-local function HookModernItemPurchase(auctionID, price)
+local function RecordModernPendingPurchase(auctionID, price, action, dealType, result)
 	local listing = modernAuctions[auctionID]
+	if result and result.auctionID == auctionID and result.itemKey and result.itemKey.itemID then
+		listing = {
+			auctionID = auctionID,
+			buyout = result.buyoutAmount,
+			-- BidInfo omits quantity because Modern non-commodity auctions always
+			-- contain one item; item-search results provide it explicitly.
+			count = result.quantity or 1,
+			itemID = result.itemKey.itemID,
+			minBid = result.minBid,
+		}
+		modernAuctions[auctionID] = listing
+	end
 	local scope = scanner:GetAuctionScope()
-	if not listing or not scope or not listing.buyout or listing.buyout ~= price then
+	if not listing or not scope or not price or price < 1 then
+		return
+	end
+	action = action or (listing.buyout and listing.buyout == price and "buy" or "bid")
+	if action ~= "bid" and action ~= "buy" then
 		return
 	end
 
+	local _, _, _, _, _, _, _, _, _, _, vendorSell = C_Item.GetItemInfo(listing.itemID)
+	local vendorReturn = vendorSell and vendorSell * listing.count or 0
+	local vendorFlip = dealType == "vendor" or dealType == nil
+		and addon:IsVendorDealProfitable(price, vendorReturn)
+	local now = GetServerTime()
+
 	local pending = addon.db.char.pendingPurchases
 	for index = #pending, 1, -1 do
-		if pending[index].auctionID == auctionID then
-			pending[index].price = price
-			pending[index].timestamp = GetServerTime()
-			return
+		local purchase = pending[index]
+		if purchase.auctionID == auctionID then
+			purchase.action = action
+			purchase.auctionHouseType = addon:GetAuctionHouseTypeForScope(scope)
+			purchase.buyout = listing.buyout
+			purchase.count = listing.count
+			purchase.dealType = dealType or purchase.dealType
+			purchase.itemID = listing.itemID
+			purchase.marketKey = addon.db.keys[scope]
+			purchase.minBid = listing.minBid
+			purchase.price = price
+			purchase.realmGroup = addon:GetConnectedRealmKey()
+			purchase.scope = scope
+			purchase.timestamp = now
+			purchase.vendorSell = vendorSell
+			purchase.vendorFlip = vendorFlip or nil
+			return purchase
 		end
 	end
-	pending[#pending + 1] = {
-		action = "buy",
+	local purchase = {
+		action = action,
 		auctionHouseType = addon:GetAuctionHouseTypeForScope(scope),
 		auctionID = auctionID,
-		buyout = price,
+		buyout = listing.buyout,
 		count = listing.count,
+		dealType = dealType,
 		itemID = listing.itemID,
+		marketKey = addon.db.keys[scope],
+		minBid = listing.minBid,
 		price = price,
+		realmGroup = addon:GetConnectedRealmKey(),
 		scope = scope,
-		timestamp = GetServerTime(),
+		timestamp = now,
+		vendorSell = vendorSell,
+		vendorFlip = vendorFlip or nil,
 	}
+	pending[#pending + 1] = purchase
+	return purchase
+end
+
+local function CacheModernBids()
+	if not scanner:GetAuctionScope() then
+		return
+	end
+
+	local playerGUID = UnitGUID("player")
+	---@diagnostic disable-next-line: wrong-flavor-api
+	for _, bid in ipairs(C_AuctionHouse.GetBids()) do
+		-- GUIDs are trusted only in this live session. The saved record deliberately
+		-- keeps the stable auction ID and amount instead, so relogging cannot make an
+		-- old GUID either lose protection or protect an auction after an alt is outbid.
+		if bid.bidder == playerGUID and bid.bidAmount and bid.bidAmount > 0 then
+			RecordModernPendingPurchase(bid.auctionID, bid.bidAmount, "bid", nil, bid)
+		end
+	end
+end
+
+local function HookModernItemPurchase(auctionID, price)
+	-- A YAAHA action records richer metadata immediately before PlaceBid. Claim
+	-- that synchronous hook rather than replacing its explicit deal classification.
+	local claim = modernPurchaseHookClaim
+	modernPurchaseHookClaim = nil
+	if claim and claim.auctionID == auctionID and claim.price == price then
+		return
+	end
+	RecordModernPendingPurchase(auctionID, price)
 end
 
 local function ConfirmModernItemPurchase(_, auctionID)
@@ -993,7 +1119,7 @@ local function RecordPendingPurchase(listType, index, price, action, dealType)
 		return
 	end
 	local scope = scanner:GetAuctionScope()
-	if not scope or listType ~= "list" then
+	if not scope or listType ~= "list" and listType ~= "bidder" then
 		return
 	end
 
@@ -1001,6 +1127,7 @@ local function RecordPendingPurchase(listType, index, price, action, dealType)
 	if not itemID or not count or count < 1 then
 		return
 	end
+	action = action or (buyout and buyout > 0 and price == buyout and "buy" or "bid")
 	local _, _, _, _, _, _, _, _, _, _, vendorSell = C_Item.GetItemInfo(itemID)
 	local vendorReturn = vendorSell and vendorSell * count or 0
 	local vendorFlip = dealType == "vendor" or dealType == nil
@@ -1014,15 +1141,26 @@ local function RecordPendingPurchase(listType, index, price, action, dealType)
 		local purchase = pending[pendingIndex]
 		if now - purchase.timestamp >= 30 * SECONDS_PER_DAY then
 			tableRemove(pending, pendingIndex)
-		elseif action == "bid" and purchase.action == "bid" and purchase.vendorFlip
+		elseif action == "bid" and purchase.action == "bid"
 			and purchase.itemID == itemID and purchase.count == count and purchase.scope == scope
 			and purchase.seller == seller then
+			if purchase.price == price and purchase.buyout == buyout and purchase.minBid == minBid then
+				-- Bid-list refreshes repeat the same live auction. Keep one record rather
+				-- than growing the ledger whenever Blizzard refreshes that list.
+				purchase.timestamp = now
+				return purchase
+			elseif not purchase.vendorFlip then
+				-- Classic has no stable auction ID. Do not merge distinct, identical
+				-- auctions unless this is YAAHA's own vendor-flip bid progression.
+				break
+			end
 			-- A later bid on the same live auction supersedes the earlier pending bid.
 			-- Keeping one record prevents repeated searches for each bid increment.
 			purchase.buyout = buyout
 			purchase.minBid = minBid
 			purchase.name = name
 			purchase.price = price
+			purchase.realmGroup = addon:GetConnectedRealmKey()
 			purchase.timestamp = now
 			purchase.vendorSell = vendorSell
 			return purchase
@@ -1037,16 +1175,35 @@ local function RecordPendingPurchase(listType, index, price, action, dealType)
 		dealType = dealType,
 		minBid = minBid,
 		matchSeller = matchSeller,
+		marketKey = addon.db.keys[scope],
 		name = name,
 		scope = scope,
 		seller = seller,
 		price = price,
+		realmGroup = addon:GetConnectedRealmKey(),
 		timestamp = now,
 		vendorSell = vendorSell,
 		vendorFlip = vendorFlip or nil,
 	}
 	pending[#pending + 1] = purchase
 	return purchase
+end
+
+local function CacheClassicBids()
+	if not scanner:GetAuctionScope() then
+		return
+	end
+
+	local count = GetNumAuctionItems("bidder")
+	for index = 1, count do
+		local _, _, _, _, _, _, _, _, _, _, bidAmount, highBidder =
+			GetAuctionItemInfo("bidder", index)
+		if highBidder and bidAmount and bidAmount > 0 then
+			-- Consume only bidder-list results Blizzard or another addon already
+			-- requested; initiating that query here could interrupt a Classic scan.
+			RecordPendingPurchase("bidder", index, bidAmount, "bid")
+		end
+	end
 end
 
 local function HookPendingPurchase(listType, index, price)
@@ -1085,6 +1242,7 @@ function module:OnEnable()
 		self:RegisterEvent("AUCTION_HOUSE_SHOW", QueryOwnedAuctionsModern)
 		self:RegisterEvent("AUCTION_HOUSE_CLOSED", CloseAuctionHouseModern)
 		self:RegisterEvent("AUCTION_HOUSE_PURCHASE_COMPLETED", ConfirmModernItemPurchase)
+		self:RegisterEvent("BIDS_UPDATED", CacheModernBids)
 		self:RegisterEvent("COMMODITY_PURCHASE_FAILED", FailModernCommodityPurchase)
 		self:RegisterEvent("COMMODITY_PURCHASE_SUCCEEDED", ConfirmModernCommodityPurchase)
 		self:RegisterEvent("ITEM_SEARCH_RESULTS_ADDED", CacheModernItemAuctions)
@@ -1095,6 +1253,7 @@ function module:OnEnable()
 		---@diagnostic disable-next-line: wrong-flavor-api
 		hooksecurefunc(C_AuctionHouse, "ConfirmCommoditiesPurchase", HookModernCommodityPurchase)
 	else
+		self:RegisterEvent("AUCTION_BIDDER_LIST_UPDATE", CacheClassicBids)
 		self:RegisterEvent("AUCTION_OWNED_LIST_UPDATE", ReadOwnedAuctionsClassic)
 		self:RegisterEvent("PLAYER_ENTERING_WORLD")
 	end
@@ -1118,6 +1277,16 @@ function module:RecordPendingPurchase(listType, index, price, action, dealType)
 	return purchase
 end
 
+function module:RecordModernPendingPurchase(auctionID, price, action, dealType, result)
+	local purchase = RecordModernPendingPurchase(auctionID, price, action, dealType, result)
+	modernPurchaseHookClaim = purchase and {
+		auctionID = auctionID,
+		price = price,
+		purchase = purchase,
+	} or nil
+	return purchase
+end
+
 function module:ReleasePendingPurchaseHook(purchase)
 	-- A module-local PlaceAuctionBid reference can bypass a later global wrapper.
 	-- Do not let an unconsumed claim suppress the next unrelated auction action.
@@ -1126,7 +1295,13 @@ function module:ReleasePendingPurchaseHook(purchase)
 	end
 end
 
-function module:GetPendingVendorBids(scope)
+function module:ReleaseModernPendingPurchaseHook(purchase)
+	if modernPurchaseHookClaim and modernPurchaseHookClaim.purchase == purchase then
+		modernPurchaseHookClaim = nil
+	end
+end
+
+function module:GetPendingBids(scope, includeAlts)
 	local now = GetServerTime()
 	local pending = addon.db.char.pendingPurchases
 	local bids = {}
@@ -1134,11 +1309,69 @@ function module:GetPendingVendorBids(scope)
 		local purchase = pending[index]
 		if now - purchase.timestamp >= 30 * SECONDS_PER_DAY then
 			tableRemove(pending, index)
-		elseif purchase.scope == scope and purchase.vendorFlip and purchase.action == "bid" then
-			bids[#bids + 1] = purchase
+		end
+	end
+
+	local marketKey = addon.db.keys[scope]
+	local auctionHouseType = addon:GetAuctionHouseTypeForScope(scope)
+	local realmGroup = addon:GetConnectedRealmKey()
+	AppendPendingBids(bids, pending, addon.db.keys.char, scope, marketKey,
+		auctionHouseType, realmGroup, now)
+	if includeAlts then
+		-- Pending purchases remain character-scoped because their mail and refunds do.
+		-- Reading other character scopes here prevents one alt from bidding against or
+		-- buying out another alt's still-active bid.
+		for characterKey, characterData in pairs(addon.db.sv.char or {}) do
+			local altPending = characterData.pendingPurchases
+			if characterKey ~= addon.db.keys.char and type(altPending) == "table" then
+				AppendPendingBids(bids, altPending, characterKey, scope, marketKey,
+					auctionHouseType, realmGroup, now)
+			end
 		end
 	end
 	return bids
+end
+
+function module:IsClassicAccountHighBidder(listing, pendingBids)
+	if listing.highBidder == true
+		or listing.bidderFullName and addon:IsAlt(listing.bidderFullName) then
+		return true
+	end
+
+	if not pendingBids then
+		return false
+	end
+	local seller = addon:NormalizeCharacterName(listing.ownerFullName or listing.owner)
+	for index = 1, #pendingBids do
+		local purchase = pendingBids[index]
+		if purchase.itemID == listing.itemID and purchase.price == listing.bidAmount
+			and purchase.count == listing.count and purchase.minBid == listing.minBid
+			and purchase.buyout == listing.buyout and purchase.seller == seller then
+			return true
+		end
+	end
+	return false
+end
+
+function module:IsModernAccountHighBidder(result, itemID, pendingBids)
+	if result.containsOwnerItem or result.containsAccountItem
+		or result.bidder and result.bidder == UnitGUID("player") then
+		return true
+	end
+
+	if not pendingBids then
+		return false
+	end
+	for index = 1, #pendingBids do
+		local purchase = pendingBids[index]
+		-- Auction IDs identify the live listing, while the exact current bid proves
+		-- the saved alt has not subsequently been outbid. No persisted GUID is used.
+		if purchase.auctionID == result.auctionID and purchase.itemID == itemID
+			and purchase.price == result.bidAmount then
+			return true
+		end
+	end
+	return false
 end
 
 function module:DiscardPendingPurchase(purchase)

@@ -3,6 +3,7 @@
 local floor = math.floor
 local LibStub = LibStub
 local next = next
+local pairs = pairs
 local sort = table.sort
 local type = type
 

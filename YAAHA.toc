@@ -74,41 +74,74 @@ Locales\zhTW.lua
 
 Core.lua
 Options.lua
+
+# Learn breakdown results when the player disenchants, mills, or prospects items
 Data\Collectors\DisenchantingCollector.lua
 Data\Collectors\MillingCollector.lua [AllowLoadGameType wrath, mists, standard]
 Data\Collectors\ProspectingCollector.lua [AllowLoadGameType tbc, wrath, mists, standard]
+
+# Define fixed reagent conversions and load their client-specific data
 Data\Convert\CreateConvertDataModule.lua
 Data\Convert\LoadConvertDataModule-Classic.lua [AllowLoadGameType classic, camelot] [ExcludeLoadGameType mists]
 Data\Convert\LoadConvertDataModule-Modern.lua [AllowLoadGameType standard, mists]
+
+# Derive prices for materials that require specialized valuation rules
 Data\DerivedMaterial\DerivedMaterialData.lua
+
+# Define disenchanting eligibility, yields, observations, and expected values
 Data\Disenchanting\DisenchantingData.lua
+
+# Map enchanting recipes to tangible items and compatible vellums
 Data\Enchanting\EnchantingCraftData-Classic.lua [AllowLoadGameType classic, camelot] [ExcludeLoadGameType mists]
 Data\Enchanting\EnchantingCraftData-Modern.lua [AllowLoadGameType standard, mists]
 Data\Enchanting\EnchantingScrollData.lua [AllowLoadGameType wrath, mists]
+
+# Define shared and client-specific milling and prospecting yields
 Data\MaterialBreakdown\MaterialBreakdownData.lua [AllowLoadGameType tbc, wrath, mists, standard]
 Data\Milling\MillingData-Classic.lua [AllowLoadGameType wrath]
 Data\Milling\MillingData-Modern.lua [AllowLoadGameType standard, mists]
 Data\Prospecting\ProspectingData-Classic.lua [AllowLoadGameType tbc, wrath]
 Data\Prospecting\ProspectingData-Modern.lua [AllowLoadGameType standard, mists]
-Modules\AuctionHouse\AuctionHouseUI-Classic.lua [AllowLoadGameType classic] [ExcludeLoadGameType mists]
-Modules\AuctionHouse\AuctionHouseUI-Modern.lua [AllowLoadGameType mainline, mists]
+
+# Integrate with the auction house, collect sales, and scan listings
+Modules\AuctionHouse\AuctionHouseUI-Classic.lua [AllowLoadGameType classic] [ExcludeLoadGameType mists, camelot]
+Modules\AuctionHouse\AuctionHouseUI-Modern.lua [AllowLoadGameType standard, mists, camelot]
 Modules\AuctionHouse\SaleCollector.lua
-Modules\AuctionHouse\Scanner-Classic.lua [AllowLoadGameType classic] [ExcludeLoadGameType mists]
-Modules\AuctionHouse\Scanner-Modern.lua [AllowLoadGameType mainline, mists]
+Modules\AuctionHouse\Scanner-Classic.lua [AllowLoadGameType classic] [ExcludeLoadGameType mists, camelot]
+Modules\AuctionHouse\Scanner-Modern.lua [AllowLoadGameType standard, mists, camelot]
+
+# Process, store, and synchronize auction and sales data
 Modules\Data\DataProcessing.lua
 Modules\Data\Storage.lua
 Modules\Data\Sync.lua
-Modules\Disenchanting\DisenchantingDeals-Classic.lua [AllowLoadGameType classic] [ExcludeLoadGameType mists]
-Modules\Disenchanting\DisenchantingDeals-Modern.lua [AllowLoadGameType mainline, mists]
+
+# Find auction listings below their expected disenchanting value
+Modules\Disenchanting\DisenchantingDeals-Classic.lua [AllowLoadGameType classic] [ExcludeLoadGameType mists, camelot]
+Modules\Disenchanting\DisenchantingDeals-Modern.lua [AllowLoadGameType standard, mists, camelot]
+
+# Track average purchase costs for owned inventory
 Modules\Inventory\InventoryAverageBuy.lua
+
+# Find auction listings below their expected prospecting or milling value
+Modules\MaterialBreakdown\MaterialDeals-Classic.lua [AllowLoadGameType tbc, wrath]
+Modules\MaterialBreakdown\MaterialDeals-Modern.lua [AllowLoadGameType standard, mists]
+
+# Store and scan known profession recipes
 Modules\Professions\ProfessionData.lua
 Modules\Professions\ProfessionScanner-Classic.lua [AllowLoadGameType classic]
-Modules\Professions\ProfessionScanner-Modern.lua [AllowLoadGameType mainline]
+Modules\Professions\ProfessionScanner-Modern.lua [AllowLoadGameType standard, camelot]
+
+# Add YAAHA data to supported item tooltips
 Modules\Tooltip\Tooltip.lua
 Modules\Tooltip\TooltipHooks-Classic.lua [AllowLoadGameType classic] [ExcludeLoadGameType camelot]
 Modules\Tooltip\TooltipHooks-Modern.lua [AllowLoadGameType standard, camelot]
+
+# Record unlimited-supply vendor prices for known recipe reagents
 Modules\Vendor\MerchantData.lua
-Modules\VendorFlip\VendorDeals-Classic.lua [AllowLoadGameType classic] [ExcludeLoadGameType mists]
-Modules\VendorFlip\VendorDeals-Modern.lua [AllowLoadGameType mainline, mists]
+
+# Find and track profitable vendor flips
+Modules\VendorFlip\VendorDeals-Classic.lua [AllowLoadGameType classic] [ExcludeLoadGameType mists, camelot]
+Modules\VendorFlip\VendorDeals-Modern.lua [AllowLoadGameType standard, mists, camelot]
 Modules\VendorFlip\VendorFlipTracking.lua
+
 API\API.lua

@@ -5,6 +5,7 @@ local GetMerchantItemInfo = GetMerchantItemInfo
 local GetMerchantItemID = GetMerchantItemID
 local GetMerchantNumItems = GetMerchantNumItems
 local LibStub = LibStub
+local pairs = pairs
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("MerchantData", "AceEvent-3.0")

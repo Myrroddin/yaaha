@@ -196,7 +196,7 @@ function module:SaveProfession(professionKey, profession)
 	return true
 end
 
-function module:RemoveProfessions(predicate)
+function module:RemoveProfessions(predicate, context)
 	local characterKey = addon:GetCharacterKey()
 	if not characterKey then
 		return false
@@ -204,7 +204,7 @@ function module:RemoveProfessions(predicate)
 	local professions = GetProfessionStore()[characterKey]
 	local changed = false
 	for professionKey, profession in pairs(professions) do
-		if predicate(professionKey, profession) then
+		if predicate(professionKey, profession, context) then
 			professions[professionKey] = nil
 			changed = true
 		end

@@ -8,6 +8,7 @@ local ceil = math.ceil
 local GetMerchantItemInfo = GetMerchantItemInfo
 local GetMerchantItemLink = GetMerchantItemLink
 local GetMerchantNumItems = GetMerchantNumItems
+local GetTime = GetTime
 local hooksecurefunc = hooksecurefunc
 local ipairs = ipairs
 local LibStub = LibStub
@@ -16,7 +17,7 @@ local min = math.min
 local NUM_BAG_SLOTS = NUM_BAG_SLOTS
 local NUM_BANKBAGSLOTS = NUM_BANKBAGSLOTS
 local pairs = pairs
-local tableRemove = table.remove
+local wipe = wipe
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("InventoryAverageBuy", "AceEvent-3.0")
@@ -24,6 +25,8 @@ local module = addon:NewModule("InventoryAverageBuy", "AceEvent-3.0")
 local bankOpen = false
 local merchantCounts = {}
 local merchantPending = {}
+local merchantCapturePending = false
+local visibleItemIDs = {}
 
 local function GetRecord(itemID)
 	local records = addon.db.factionrealm.inventoryPurchases
@@ -112,8 +115,9 @@ local function RemoveFIFO(itemID, quantity)
 	end
 
 	local lots = record.lots
-	while quantity > 0 and lots[1] do
-		local lot = lots[1]
+	local readIndex = 1
+	while quantity > 0 and lots[readIndex] do
+		local lot = lots[readIndex]
 		local removed = min(quantity, lot.quantity)
 		if lot.totalCost then
 			lot.totalCost = lot.totalCost * (lot.quantity - removed) / lot.quantity
@@ -121,7 +125,17 @@ local function RemoveFIFO(itemID, quantity)
 		lot.quantity = lot.quantity - removed
 		quantity = quantity - removed
 		if lot.quantity == 0 then
-			tableRemove(lots, 1)
+			readIndex = readIndex + 1
+		end
+	end
+	if readIndex > 1 then
+		local writeIndex = 1
+		for index = readIndex, #lots do
+			lots[writeIndex] = lots[index]
+			writeIndex = writeIndex + 1
+		end
+		for index = writeIndex, #lots do
+			lots[index] = nil
 		end
 	end
 	if not lots[1] then
@@ -141,7 +155,8 @@ local function DiscoverContainer(container, itemIDs)
 end
 
 local function DiscoverVisibleItems()
-	local itemIDs = {}
+	wipe(visibleItemIDs)
+	local itemIDs = visibleItemIDs
 	for bag = 0, NUM_BAG_SLOTS do
 		DiscoverContainer(bag, itemIDs)
 	end
@@ -286,13 +301,40 @@ function module:GetValue(itemID)
 end
 
 local function SnapshotMerchantItems()
-	merchantCounts = {}
+	wipe(merchantCounts)
 	for index = 1, GetMerchantNumItems() do
 		local link = GetMerchantItemLink(index)
 		local itemID = addon:GetItemID(link)
 		if itemID then
 			merchantCounts[itemID] = C_Item.GetItemCount(itemID, true)
 		end
+	end
+end
+
+local function FinishMerchantPurchases()
+	local now = GetTime()
+	local nextDelay
+	for itemID, purchase in pairs(merchantPending) do
+		if purchase.readyAt <= now then
+			merchantPending[itemID] = nil
+			local current = C_Item.GetItemCount(itemID, true)
+			local quantity = current - purchase.count
+			if quantity > 0 then
+				module:RecordPurchase(itemID, quantity,
+					ceil(quantity / purchase.batchSize) * purchase.price)
+			end
+			merchantCounts[itemID] = current
+		else
+			local delay = purchase.readyAt - now
+			if not nextDelay or delay < nextDelay then
+				nextDelay = delay
+			end
+		end
+	end
+	if nextDelay then
+		C_Timer.After(nextDelay, FinishMerchantPurchases)
+	else
+		merchantCapturePending = false
 	end
 end
 
@@ -307,19 +349,13 @@ local function CaptureMerchantPurchase(index)
 		pending = { count = merchantCounts[itemID] or C_Item.GetItemCount(itemID, true), price = price, batchSize = batchSize }
 		merchantPending[itemID] = pending
 	end
-	C_Timer.After(0.1, function()
-		local purchase = merchantPending[itemID]
-		if not purchase then
-			return
-		end
-		merchantPending[itemID] = nil
-		local current = C_Item.GetItemCount(itemID, true)
-		local quantity = current - purchase.count
-		if quantity > 0 then
-			module:RecordPurchase(itemID, quantity, ceil(quantity / purchase.batchSize) * purchase.price)
-		end
-		merchantCounts[itemID] = current
-	end)
+	pending.readyAt = GetTime() + 0.1
+	-- Multiple BuyMerchantItem calls can occur before bags update. One shared
+	-- deferred loop records pending items without allocating a timer closure per click.
+	if not merchantCapturePending then
+		merchantCapturePending = true
+		C_Timer.After(0.1, FinishMerchantPurchases)
+	end
 end
 
 function module:BAG_UPDATE_DELAYED()

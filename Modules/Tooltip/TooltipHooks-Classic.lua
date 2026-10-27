@@ -24,6 +24,14 @@ local function OnTooltipSetSpell(tooltip)
 	module:ProcessSpellTooltip(tooltip)
 end
 
+local function OnTooltipCleared(tooltip)
+	module:ClearTooltipState(tooltip)
+end
+
+local function OnTooltipHidden(tooltip)
+	module:ClearTooltipDisplayState(tooltip)
+end
+
 local function OnTooltipSetCraftItem(tooltip, recipeIndex, reagentIndex)
 	if reagentIndex then
 		return
@@ -61,15 +69,11 @@ function module:OnEnable()
 		if tooltip:HasScript("OnTooltipSetSpell") then
 			tooltip:HookScript("OnTooltipSetSpell", OnTooltipSetSpell)
 		end
-		tooltip:HookScript("OnTooltipCleared", function(activeTooltip)
-			module:ClearTooltipState(activeTooltip)
-		end)
+		tooltip:HookScript("OnTooltipCleared", OnTooltipCleared)
 		-- Some replacement profession UIs hide and rebuild GameTooltip without
 		-- invoking the clearing sequence above. Forget the deduplication state so
 		-- the same recipe receives YAAHA's lines the next time it is displayed.
-		tooltip:HookScript("OnHide", function(activeTooltip)
-			module:ClearTooltipDisplayState(activeTooltip)
-		end)
+		tooltip:HookScript("OnHide", OnTooltipHidden)
 	end
 	if GameTooltip.SetCraftItem then
 		hooksecurefunc(GameTooltip, "SetCraftItem", OnTooltipSetCraftItem)
