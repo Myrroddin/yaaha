@@ -34,22 +34,13 @@ local tostring = tostring
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local usesSharedAuctionHouse = addon.usesSharedAuctionHouse
 local module = addon:NewModule("Tooltip")
+local breakdownData = addon:GetModule("BreakdownData")
 local convertData = addon:GetModule("ConvertData")
-local disenchantingData = addon:GetModule("DisenchantingData")
 local inventoryAverageBuy = addon:GetModule("InventoryAverageBuy")
-local millingData = addon:GetModule("MillingData", true)
 local professionScanner = addon:GetModule("ProfessionScanner")
-local prospectingData = addon:GetModule("ProspectingData", true)
 local saleCollector = addon:GetModule("SaleCollector")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 local storage
-local breakdownDataModules = { disenchantingData }
-if prospectingData then
-	breakdownDataModules[#breakdownDataModules + 1] = prospectingData
-end
-if millingData then
-	breakdownDataModules[#breakdownDataModules + 1] = millingData
-end
 
 -- Ordering prefixes belong only to profile settings. Keep the stored price and
 -- trend field names unchanged; each row maps its data field to its option key.
@@ -293,15 +284,6 @@ local function GetCraftSaleValue(data)
 	end
 end
 
-local function GetBreakdown(itemID, priceScope, priceDB)
-	for index = 1, #breakdownDataModules do
-		local breakdown = breakdownDataModules[index]:GetValue(itemID, priceScope, priceDB)
-		if breakdown then
-			return breakdown
-		end
-	end
-end
-
 local function FormatCraftingValue(result, multiplier, auctionData, auctionCut)
 	if not result or not result.value then
 		return "--"
@@ -328,7 +310,7 @@ function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 	local priceScope = activeScope == "realm" and "realm" or "factionrealm"
 	local settings = addon.db.profile.tooltip
 	local breakdown = (settings["10-breakdownValue"] or settings["11-breakdownResults"])
-		and GetBreakdown(itemID, priceScope, scopeDB.auctionDB) or nil
+		and breakdownData:GetValue(itemID, priceScope, scopeDB.auctionDB) or nil
 	local conversion = (settings["21-conversionValue"] or settings["22-conversionResults"])
 		and convertData:GetValue(itemID, priceScope, scopeDB.auctionDB) or nil
 	local inventoryBuy = inventoryAverageBuy:GetValue(itemID)

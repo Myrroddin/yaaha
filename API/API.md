@@ -10,6 +10,7 @@ YAAHA exposes a deliberately small public API to other World of Warcraft addons 
 - [Quick start](#quick-start)
 - [Common conventions](#common-conventions)
   - [Calling functions](#calling-functions)
+  - [Item IDs and per-unit results](#item-ids-and-per-unit-results)
   - [Auction-house types](#auction-house-types)
   - [Unavailable data](#unavailable-data)
   - [Numbers and money](#numbers-and-money)
@@ -19,10 +20,14 @@ YAAHA exposes a deliberately small public API to other World of Warcraft addons 
   - [`IterateAuctionHouse`](#iterateauctionhouse)
   - [Item-data wrappers](#item-data-wrappers)
   - [`GetAuctionHouseStats`](#getauctionhousestats)
+- [Price sources](#price-sources)
+  - [`GetPriceSourceValue`](#getpricesourcevalue)
+  - [`IsPriceSourceValid`](#ispricesourcevalid)
+  - [`GetPriceSourceDescription`](#getpricesourcedescription)
 - [Realm sale metrics](#realm-sale-metrics)
-- [Disenchanting](#disenchanting)
-  - [`IsDisenchantable` and `GetDisenchantResults`](#isdisenchantable-and-getdisenchantresults)
-  - [`GetDisenchantValue`](#getdisenchantvalue)
+- [Material breakdowns](#material-breakdowns)
+  - [`IsBreakable` and `GetBreakdownResults`](#isbreakable-and-getbreakdownresults)
+  - [`GetBreakdownValue`](#getbreakdownvalue)
 - [Crafting](#crafting)
   - [Crafting functions](#crafting-functions)
   - [Crafting results](#crafting-results)
@@ -59,6 +64,19 @@ Public functions use dot-call syntax because they are functions on a global name
 ```lua
 local version = YAAHA_API.GetVersion()
 ```
+
+### Item IDs and per-unit results
+
+An `itemID` identifies an item type, not an inventory quantity. Passing an
+`itemID` never tells YAAHA how many copies the player owns and does not ask YAAHA
+whether the player currently has enough items, profession skill, or other
+requirements to perform an action.
+
+Unless a field explicitly describes an auction count, auction quantity, observed
+transaction quantity, or complete breakdown operation, every item price, value,
+and cost returned for an `itemID` is for one unit. APIs do not multiply results by
+the player's inventory, cursor stack, auction stack, or a profession's required
+input quantity.
 
 ### Auction-house types
 
@@ -180,6 +198,78 @@ Returns `nil` when no complete scan or synchronized snapshot is available. Other
 | `totalListings` | `integer` | Number of listings represented by the snapshot. |
 | `totalItems` | `integer` | Number of distinct item IDs represented by the snapshot. |
 
+## Price sources
+
+YAAHA price-source keys let consumers select a supported valuation without mapping
+each key to a separate API function. All values are per item and expressed in copper.
+
+| Key | Localized description | Meaning |
+| --- | --- | --- |
+| `minBid` | YAAHA Minimum bid | Lowest payable bid in the current snapshot. |
+| `minBuyout` | YAAHA Minimum buyout | Lowest buyout in the current snapshot. |
+| `currentMarketValue` | YAAHA Current market value | Market value calculated from the current scan. |
+| `midweekMarketValue` | YAAHA 3-day market value | Weighted rolling three-day market value. |
+| `weeklyMarketValue` | YAAHA 7-day market value | Weighted rolling seven-day market value. |
+| `biweeklyMarketValue` | YAAHA 14-day market value | Weighted rolling fourteen-day market value. |
+| `monthlyMarketValue` | YAAHA 30-day market value | Weighted rolling thirty-day market value. |
+| `bimonthlyMarketValue` | YAAHA 60-day market value | Weighted rolling sixty-day market value. |
+| `crafting` | YAAHA Crafting cost | Complete per-unit cost of a known recipe producing the item. |
+| `reagentCost` | YAAHA Reagent cost | YAAHA's complete material cost for an item used by a known recipe. |
+| `breakdown` | YAAHA Expected breakdown value | Complete expected per-unit disenchanting, prospecting, or milling value. |
+
+`firstNonZeroMarketValue` is a convenience result, not a price-source key. Its
+`firstNonZeroMarketSource` identifies the actual market source which supplied it.
+Material acquisition labels such as `market`, `vendor`, `convert`, `derived`, and
+`soulboundFallback` are provenance details and are not price-source keys.
+
+### `GetPriceSourceValue`
+
+```lua
+local value, errorMessage = YAAHA_API.GetPriceSourceValue(
+    "reagentCost",
+    itemID,
+    auctionHouseType
+)
+```
+
+Returns the source's per-item value, or `nil` followed by a non-localized error
+message. Every price source must resolve to a positive value.
+
+`crafting` is available only for an output produced by a known recipe.
+`reagentCost` is available only when the item is used by at least one known recipe
+in the active faction-realm. Its calculation first honors an authoritative
+item-specific derived method.
+Without one, a known unlimited vendor price is authoritative; otherwise YAAHA
+compares the current market value, conversions, and recursively known crafting
+paths. The soulbound estimate is the final eligible fallback.
+
+### `IsPriceSourceValid`
+
+```lua
+local valid, errorMessage = YAAHA_API.IsPriceSourceValid(
+    priceSource,
+    itemID,
+    auctionHouseType
+)
+```
+
+Returns whether the recognized source currently resolves to an allowed value for
+that item and market. Consequently, a recognized source may be invalid for one
+item and valid for another. Error messages are stable English diagnostics intended
+for developers and are not localized.
+
+### `GetPriceSourceDescription`
+
+```lua
+local description, errorMessage =
+    YAAHA_API.GetPriceSourceDescription("currentMarketValue")
+-- "YAAHA Current market value" in an English client
+```
+
+Returns the localized, YAAHA-prefixed display name. It validates only the source
+key because descriptions do not depend on an item or auction house. An unknown key
+returns `nil` followed by a non-localized error message.
+
 ## Realm sale metrics
 
 These functions accept `(itemID, auctionHouseType)`. Each observation expires exactly 60 days after its confirmed auction outcome.
@@ -200,62 +290,84 @@ The observed window begins when YAAHA first tracks that market. Guild synchroniz
 
 Personal sale history is private user activity and is not exposed by the public API.
 
-## Disenchanting
+## Material breakdowns
 
-Disenchant result ranges are not separated by auction-house type. Pricing those results does use the requested market.
+YAAHA presents disenchanting, prospecting, and milling through one breakdown
+contract. Result ranges are global; pricing their outputs uses the requested
+auction house. The aggregate price is always for one input item, even when the
+game requires five ores or herbs to perform one prospecting or milling cast.
 
-### `IsDisenchantable` and `GetDisenchantResults`
+### `IsBreakable` and `GetBreakdownResults`
 
 ```lua
-local known = YAAHA_API.IsDisenchantable(itemID)
-local breakdown = YAAHA_API.GetDisenchantResults(itemID)
+local known = YAAHA_API.IsBreakable(itemID)
+local breakdown = YAAHA_API.GetBreakdownResults(itemID)
 ```
 
-`IsDisenchantable` returns whether YAAHA recognizes the item and has a result range. `GetDisenchantResults` returns `nil` when it does not, or a `YAAHA_API.DisenchantResults` snapshot:
+`IsBreakable` is a strict item-classification Boolean: it returns `true` when
+YAAHA recognizes the item as breakable by any supported mechanic, and `false`
+otherwise. It does not inspect the player's inventory, profession, skill, or
+ability to perform that action. For example, it returns `true` for a recognized
+prospectable ore or millable herb even when the player owns fewer than the five
+items required for one operation.
+
+`GetBreakdownResults` returns `nil` when YAAHA does not recognize the item, or a
+`YAAHA_API.BreakdownResults` snapshot:
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `requiredSkill` | `integer` | Required Enchanting skill. |
-| `sampleCount` | `integer` | Learned local and synchronized observations contributing to the result range. `0` means the built-in dataset is being used without learned observations. |
-| `results` | `DisenchantMaterial[]` | Possible materials. |
+| `breakdownType` | `string` | `"disenchanting"`, `"prospecting"`, or `"milling"`. |
+| `requiredQuantity` | `integer` | Input quantity consumed by one operation: normally `1` for disenchanting or `5` for prospecting and milling. |
+| `requiredSkill` | `integer` | Required profession skill. |
+| `sampleCount` | `integer` | Learned local and synchronized observations contributing to the result range. `0` means only the built-in dataset is used. |
+| `results` | `BreakdownMaterial[]` | Possible material results for one operation. |
 
 Each material contains:
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `itemID` | `integer` | Resulting enchanting-material item ID. |
-| `chance` | `number` | Decimal probability of receiving the material. |
-| `minQuantity` | `integer` | Minimum possible quantity. |
-| `maxQuantity` | `integer` | Maximum possible quantity. |
-| `expectedQuantity` | `number` | Probability-adjusted expected quantity per disenchant. |
+| `itemID` | `integer` | Resulting material item ID. |
+| `chance` | `number` | Decimal probability of receiving the material from one operation. |
+| `minQuantity` | `integer` | Minimum possible quantity per operation. |
+| `maxQuantity` | `integer` | Maximum possible quantity per operation. |
+| `expectedQuantity` | `number` | Probability-adjusted expected quantity per operation. |
 
-### `GetDisenchantValue`
+### `GetBreakdownValue`
 
 ```lua
-local value = YAAHA_API.GetDisenchantValue(itemID, auctionHouseType)
-local full = YAAHA_API.GetDisenchantValue(itemID, auctionHouseType, true)
+local value = YAAHA_API.GetBreakdownValue(itemID, auctionHouseType)
+local full = YAAHA_API.GetBreakdownValue(itemID, auctionHouseType, true)
 ```
 
-YAAHA prices each possible material with its positive `currentMarketValue` from the selected market. Historical market windows, minimum bids, and minimum buyouts are not substituted. This keeps the result tied to materials present in the latest market snapshot.
+YAAHA prices every possible result with its positive `currentMarketValue` from
+the selected market. Historical market windows, minimum bids, and minimum buyouts
+are not substituted. This keeps the value tied to materials present in the latest
+market snapshot.
 
-Without `fullResults`, the function returns the summed expected value in copper. It returns `nil` when the item is unknown, the request is invalid, or any possible material lacks a current price.
+Without `fullResults`, the function returns the complete expected value of one
+input item in copper. It returns `nil` when the item is unknown, the request is
+invalid, or any possible result lacks a current price.
 
-With `fullResults = true`, it returns a `YAAHA_API.PricedDisenchantResults` snapshot only when every possible material has a valid current price. If any price is missing, the entire API call returns `nil`; the public API never exposes a partial priced result:
+With `fullResults = true`, it returns a `YAAHA_API.PricedBreakdownResults`
+snapshot only when every possible material has a valid current price. The public
+API never exposes a partial aggregate:
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `expectedValue` | `integer` | Complete expected value in copper. |
-| `requiredSkill` | `integer` | Required Enchanting skill. |
+| `expectedValue` | `integer` | Complete expected value per input item in copper. |
+| `breakdownType` | `string` | Applicable breakdown mechanic. |
+| `requiredQuantity` | `integer` | Input quantity consumed by one operation. |
+| `requiredSkill` | `integer` | Required profession skill. |
 | `sampleCount` | `integer` | Learned observation count. |
-| `results` | `PricedDisenchantMaterial[]` | Priced possible materials. |
+| `results` | `PricedBreakdownMaterial[]` | Priced possible materials for one operation. |
 
-Each priced material contains the fields from `DisenchantMaterial` plus:
+Each priced material contains the fields from `BreakdownMaterial` plus:
 
 | Key | Type | Meaning |
 | --- | --- | --- |
 | `marketValue` | `integer` | Per-unit current market value in copper. |
 | `priceSource` | `string` | `"currentMarketValue"`. |
-| `expectedValue` | `integer` | Probability-adjusted value in copper. |
+| `expectedValue` | `integer` | Probability-adjusted material value per operation in copper. |
 | `missingPrice` | `boolean` | Always `false`; incomplete priced results return `nil`. |
 
 ## Crafting

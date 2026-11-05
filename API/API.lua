@@ -1,18 +1,21 @@
 -- Exposes YAAHA's stable, read-only market, sale, breakdown, and crafting API.
 
 local floor = math.floor
+local format = string.format
 local LibStub = LibStub
 local next = next
 local pairs = pairs
 local sort = table.sort
+local tostring = tostring
 local type = type
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local usesSharedAuctionHouse = addon.usesSharedAuctionHouse
 local saleCollector = addon:GetModule("SaleCollector")
-local disenchantingData = addon:GetModule("DisenchantingData")
+local breakdownData = addon:GetModule("BreakdownData")
 local professionScanner = addon:GetModule("ProfessionScanner")
 local storage = addon:GetModule("Storage")
+local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
 -- API versions are independent of addon releases. Increment this only when a
 -- change to the public contract requires consumers to distinguish API behavior.
@@ -22,6 +25,8 @@ local API_VERSION = 1
 ---@alias YAAHA_API.DataUpdateSource "scan"|"sync"
 ---@alias YAAHA_API.DataUpdateEvent "AUCTION_HOUSE_DATA_UPDATED"
 ---@alias YAAHA_API.MarketValueSource "currentMarketValue"|"midweekMarketValue"|"weeklyMarketValue"|"biweeklyMarketValue"|"monthlyMarketValue"|"bimonthlyMarketValue"
+---@alias YAAHA_API.PriceSource "minBid"|"minBuyout"|YAAHA_API.MarketValueSource|"crafting"|"reagentCost"|"breakdown"
+---@alias YAAHA_API.BreakdownType "disenchanting"|"prospecting"|"milling"
 ---@alias YAAHA_API.AuctionHouseIterator fun(): integer?, YAAHA_API.ItemData?
 
 ---@class YAAHA_API.ItemData
@@ -44,29 +49,33 @@ local API_VERSION = 1
 ---@field totalItems integer Number of distinct item IDs in the snapshot.
 ---@field totalListings integer Number of auction listings in the snapshot.
 
----@class YAAHA_API.DisenchantMaterial
----@field itemID integer Resulting enchanting-material item ID.
+---@class YAAHA_API.BreakdownMaterial
+---@field itemID integer Resulting material item ID.
 ---@field chance number Decimal probability of receiving this material.
 ---@field minQuantity integer Minimum possible quantity.
 ---@field maxQuantity integer Maximum possible quantity.
----@field expectedQuantity number Probability-adjusted expected quantity.
+---@field expectedQuantity number Probability-adjusted expected quantity per breakdown operation.
 
----@class YAAHA_API.DisenchantResults
----@field requiredSkill integer Required Enchanting skill.
----@field sampleCount integer Number of learned local and synchronized disenchantments contributing to this result range.
----@field results YAAHA_API.DisenchantMaterial[] Possible material results.
+---@class YAAHA_API.BreakdownResults
+---@field breakdownType YAAHA_API.BreakdownType Applicable breakdown mechanic.
+---@field requiredQuantity integer Input items consumed by one breakdown operation.
+---@field requiredSkill integer Required profession skill.
+---@field sampleCount integer Number of learned local and synchronized observations contributing to this result range.
+---@field results YAAHA_API.BreakdownMaterial[] Possible material results per operation.
 
----@class YAAHA_API.PricedDisenchantMaterial: YAAHA_API.DisenchantMaterial
+---@class YAAHA_API.PricedBreakdownMaterial: YAAHA_API.BreakdownMaterial
 ---@field marketValue integer Selected per-unit material value in copper.
 ---@field priceSource YAAHA_API.MarketValueSource Market-value source used for this material.
----@field expectedValue integer Probability-adjusted material value in copper.
+---@field expectedValue integer Probability-adjusted material value per breakdown operation in copper.
 ---@field missingPrice boolean Always false; an incomplete priced result is never exposed.
 
----@class YAAHA_API.PricedDisenchantResults
----@field expectedValue integer Complete expected disenchant value in copper.
----@field requiredSkill integer Required Enchanting skill.
----@field sampleCount integer Number of learned local and synchronized disenchantments contributing to this result range.
----@field results YAAHA_API.PricedDisenchantMaterial[] Priced material results.
+---@class YAAHA_API.PricedBreakdownResults
+---@field expectedValue integer Complete expected breakdown value per input item in copper.
+---@field breakdownType YAAHA_API.BreakdownType Applicable breakdown mechanic.
+---@field requiredQuantity integer Input items consumed by one breakdown operation.
+---@field requiredSkill integer Required profession skill.
+---@field sampleCount integer Number of learned local and synchronized observations contributing to this result range.
+---@field results YAAHA_API.PricedBreakdownMaterial[] Priced material results per operation.
 
 ---@alias YAAHA_API.MaterialValueSource "market"|"vendor"|"convert"|"crafting"|"derived"|"soulboundFallback"
 
@@ -123,11 +132,14 @@ local API_VERSION = 1
 ---@field GetRealmRollingSaleRate fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): number?
 ---@field GetRealmRollingSalesPerDay fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): number?
 ---@field GetRealmRollingAverageSaleValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?
----@field IsDisenchantable fun(itemID: integer): boolean
----@field GetDisenchantResults fun(itemID: integer): YAAHA_API.DisenchantResults?
----@field GetDisenchantValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType, fullResults?: boolean): integer|YAAHA_API.PricedDisenchantResults|nil
+---@field IsBreakable fun(itemID: integer): boolean
+---@field GetBreakdownResults fun(itemID: integer): YAAHA_API.BreakdownResults?
+---@field GetBreakdownValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType, fullResults?: boolean): integer|YAAHA_API.PricedBreakdownResults|nil
 ---@field GetCraftingValue fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType, fullResults?: boolean, currentCharacterOnly?: boolean): integer|YAAHA_API.CraftingResult|nil
 ---@field GetRecipeCraftingValue fun(spellID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType, fullResults?: boolean, currentCharacterOnly?: boolean): integer|YAAHA_API.CraftingResult|nil
+---@field GetPriceSourceValue fun(priceSource: YAAHA_API.PriceSource, itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): integer?, string?
+---@field IsPriceSourceValid fun(priceSource: YAAHA_API.PriceSource, itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType): boolean, string?
+---@field GetPriceSourceDescription fun(priceSource: YAAHA_API.PriceSource): string?, string?
 ---@field RegisterCallback fun(receiver: any, event: YAAHA_API.DataUpdateEvent, method?: string|YAAHA_API.DataUpdatedCallback, arg?: any)
 ---@field UnregisterCallback fun(receiver: any, event: YAAHA_API.DataUpdateEvent)
 ---@field UnregisterAllCallbacks fun(receiver: any)
@@ -459,25 +471,27 @@ function API.GetRealmRollingAverageSaleValue(itemID, auctionHouseType)
 end
 
 ---@param itemID integer
----@return boolean isDisenchantable
-function API.IsDisenchantable(itemID)
+---@return boolean isBreakable
+function API.IsBreakable(itemID)
 	if type(itemID) ~= "number" or itemID <= 0 or itemID ~= floor(itemID) then
 		return false
 	end
-	return disenchantingData:GetResults(itemID) ~= nil
+	return breakdownData:IsBreakable(itemID)
 end
 
 ---@param itemID integer
----@return YAAHA_API.DisenchantResults? results
-function API.GetDisenchantResults(itemID)
+---@return YAAHA_API.BreakdownResults? results
+function API.GetBreakdownResults(itemID)
 	if type(itemID) ~= "number" or itemID <= 0 or itemID ~= floor(itemID) then
 		return nil
 	end
-	local source = disenchantingData:GetResults(itemID)
+	local source = breakdownData:GetResults(itemID)
 	if not source then
 		return nil
 	end
 	local data = {
+		breakdownType = source.breakdownType,
+		requiredQuantity = source.requiredQuantity,
 		requiredSkill = source.requiredSkill,
 		sampleCount = source.sampleCount,
 		results = {},
@@ -499,9 +513,9 @@ end
 ---@param auctionHouseType? YAAHA_API.AuctionHouseType
 ---@param fullResults? boolean
 ---@overload fun(itemID: integer, auctionHouseType?: YAAHA_API.AuctionHouseType, fullResults?: false): integer?
----@overload fun(itemID: integer, auctionHouseType: YAAHA_API.AuctionHouseType|nil, fullResults: true): YAAHA_API.PricedDisenchantResults?
----@return integer|YAAHA_API.PricedDisenchantResults|nil value
-function API.GetDisenchantValue(itemID, auctionHouseType, fullResults)
+---@overload fun(itemID: integer, auctionHouseType: YAAHA_API.AuctionHouseType|nil, fullResults: true): YAAHA_API.PricedBreakdownResults?
+---@return integer|YAAHA_API.PricedBreakdownResults|nil value
+function API.GetBreakdownValue(itemID, auctionHouseType, fullResults)
 	if type(itemID) ~= "number" or itemID <= 0 or itemID ~= floor(itemID) then
 		return nil
 	end
@@ -513,17 +527,19 @@ function API.GetDisenchantValue(itemID, auctionHouseType, fullResults)
 		return nil
 	end
 	local scope = auctionDB == addon.db.realm.auctionDB and "realm" or "factionrealm"
-	local data = disenchantingData:GetValue(itemID, scope, auctionDB)
-	if not data or not data.expectedValue then
+	local data = breakdownData:GetValue(itemID, scope, auctionDB)
+	if not data or data.expectedUnitValue == nil then
 		return nil
 	end
-	local expectedValue = NormalizeCopper(data.expectedValue)
+	local expectedValue = NormalizeCopper(data.expectedUnitValue)
 	if not fullResults then
 		return expectedValue
 	end
 
 	local result = {
 		expectedValue = expectedValue,
+		breakdownType = data.breakdownType,
+		requiredQuantity = data.requiredQuantity,
 		requiredSkill = data.requiredSkill,
 		sampleCount = data.sampleCount,
 		results = {},
@@ -644,4 +660,118 @@ function API.GetRecipeCraftingValue(spellID, auctionHouseType, fullResults, curr
 		return CopyCraftingResult(result)
 	end
 	return result and result.value and NormalizeRequiredCopper(result.value) or nil
+end
+
+local function GetReagentCost(itemID, auctionHouseType)
+	if not professionScanner:IsKnownReagent(itemID) then
+		return
+	end
+	local auctionDB = GetAuctionDB(auctionHouseType)
+	if not auctionDB then
+		return
+	end
+	local allowAlchemySpecialization = usesSharedAuctionHouse
+		or GetAuctionScope(auctionHouseType) == "factionrealm"
+	local result = professionScanner:GetMaterialCost(
+		itemID, auctionDB, false, allowAlchemySpecialization)
+	return result and result.value and NormalizeRequiredCopper(result.value) or nil
+end
+
+local priceSourceDefinitions = {
+	minBid = {
+		label = "Minimum bid",
+		getValue = API.GetMinBid,
+	},
+	minBuyout = {
+		label = "Minimum buyout",
+		getValue = API.GetMinBuyout,
+	},
+	currentMarketValue = {
+		label = "Current market value",
+		getValue = API.GetCurrentMarketValue,
+	},
+	midweekMarketValue = {
+		label = "3-day market value",
+		getValue = API.GetMidweekMarketValue,
+	},
+	weeklyMarketValue = {
+		label = "7-day market value",
+		getValue = API.GetWeeklyMarketValue,
+	},
+	biweeklyMarketValue = {
+		label = "14-day market value",
+		getValue = API.GetBiweeklyMarketValue,
+	},
+	monthlyMarketValue = {
+		label = "30-day market value",
+		getValue = API.GetMonthlyMarketValue,
+	},
+	bimonthlyMarketValue = {
+		label = "60-day market value",
+		getValue = API.GetBimonthlyMarketValue,
+	},
+	crafting = {
+		label = "Crafting cost",
+		getValue = API.GetCraftingValue,
+	},
+	reagentCost = {
+		label = "Reagent cost",
+		getValue = GetReagentCost,
+	},
+	breakdown = {
+		label = "Expected breakdown value",
+		getValue = API.GetBreakdownValue,
+	},
+}
+
+local function GetPriceSourceDefinition(priceSource)
+	if type(priceSource) ~= "string" then
+		return nil, "priceSource must be a string"
+	end
+	local definition = priceSourceDefinitions[priceSource]
+	if not definition then
+		return nil, "Unknown YAAHA price source: " .. tostring(priceSource)
+	end
+	return definition
+end
+
+---@param priceSource YAAHA_API.PriceSource
+---@param itemID integer
+---@param auctionHouseType? YAAHA_API.AuctionHouseType
+---@return integer? value
+---@return string? errorMessage
+function API.GetPriceSourceValue(priceSource, itemID, auctionHouseType)
+	local definition, errorMessage = GetPriceSourceDefinition(priceSource)
+	if not definition then
+		return nil, errorMessage
+	end
+	if type(itemID) ~= "number" or itemID <= 0 or itemID ~= floor(itemID) then
+		return nil, "itemID must be a positive integer"
+	end
+	local value = definition.getValue(itemID, auctionHouseType)
+	if type(value) ~= "number" or value <= 0 then
+		return nil, format("YAAHA price source '%s' did not resolve for item %d", priceSource, itemID)
+	end
+	return value
+end
+
+---@param priceSource YAAHA_API.PriceSource
+---@param itemID integer
+---@param auctionHouseType? YAAHA_API.AuctionHouseType
+---@return boolean isValid
+---@return string? errorMessage
+function API.IsPriceSourceValid(priceSource, itemID, auctionHouseType)
+	local value, errorMessage = API.GetPriceSourceValue(priceSource, itemID, auctionHouseType)
+	return value ~= nil, errorMessage
+end
+
+---@param priceSource YAAHA_API.PriceSource
+---@return string? description
+---@return string? errorMessage
+function API.GetPriceSourceDescription(priceSource)
+	local definition, errorMessage = GetPriceSourceDefinition(priceSource)
+	if not definition then
+		return nil, errorMessage
+	end
+	return "YAAHA " .. L[definition.label]
 end

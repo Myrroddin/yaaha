@@ -17,7 +17,7 @@ local PROSPECTING_SPELL_ID = 31252
 local candidate, awaitingLoot
 
 local function CaptureCandidate(itemInfo)
-	if not prospectingData:IsSource(itemInfo) then
+	if not prospectingData:IsBreakable(itemInfo) then
 		return false
 	end
 	candidate = {

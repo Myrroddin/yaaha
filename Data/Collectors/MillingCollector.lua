@@ -17,7 +17,7 @@ local MILLING_SPELL_ID = 51005
 local candidate, awaitingLoot
 
 local function CaptureCandidate(itemInfo)
-	if not millingData:IsSource(itemInfo) then
+	if not millingData:IsBreakable(itemInfo) then
 		return false
 	end
 	candidate = {

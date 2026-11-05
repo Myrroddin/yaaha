@@ -51,6 +51,8 @@ local recipeRevision = 0
 local recipeIndexes = {}
 local knownReagentIndex
 local knownReagentRevision = -1
+local knownVendorReagentIndex
+local knownVendorReagentRevision = -1
 
 local ENCHANTING_VELLUM_ITEM_ID = 38682
 
@@ -102,16 +104,26 @@ local function GetKnownReagentIndex()
 		return knownReagentIndex
 	end
 	knownReagentIndex = {}
-	-- Vendor prices are global, so retain reagents known on every saved
-	-- faction-realm rather than pruning another faction's useful prices.
-	for _, scopeDB in pairs(addon.db.sv.factionrealm or {}) do
-		AddKnownReagents(knownReagentIndex, scopeDB.knownProfessions)
-	end
-	-- The active AceDB scope may contain default-backed data which has not yet
-	-- been materialized in the raw saved-variable table.
 	AddKnownReagents(knownReagentIndex, GetProfessionStore())
 	knownReagentRevision = recipeRevision
 	return knownReagentIndex
+end
+
+local function GetKnownVendorReagentIndex()
+	if knownVendorReagentRevision == recipeRevision then
+		return knownVendorReagentIndex
+	end
+	knownVendorReagentIndex = {}
+	-- Vendor prices are global, so retain reagents known on every saved
+	-- faction-realm rather than pruning another faction's useful prices.
+	for _, scopeDB in pairs(addon.db.sv.factionrealm or {}) do
+		AddKnownReagents(knownVendorReagentIndex, scopeDB.knownProfessions)
+	end
+	-- The active AceDB scope may contain default-backed data which has not yet
+	-- been materialized in the raw saved-variable table.
+	AddKnownReagents(knownVendorReagentIndex, GetProfessionStore())
+	knownVendorReagentRevision = recipeRevision
+	return knownVendorReagentIndex
 end
 
 local function GetExpectedOutputMultiplier(entry, allowAlchemySpecialization)
@@ -171,6 +183,11 @@ end
 function module:IsKnownReagent(itemID)
 	return type(itemID) == "number" and itemID > 0
 		and GetKnownReagentIndex()[itemID] == true
+end
+
+function module:IsKnownVendorReagent(itemID)
+	return type(itemID) == "number" and itemID > 0
+		and GetKnownVendorReagentIndex()[itemID] == true
 end
 
 function module:SaveProfession(professionKey, profession)

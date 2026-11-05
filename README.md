@@ -34,7 +34,7 @@ Support for Mists of Pandaria Classic and Retail (mainline), including their sha
 3. Open relevant merchants to refresh prices for vendor-supplied crafting materials.
 4. Hover over items to view the enabled YAAHA tooltip information.
 
-Hold **Shift** while viewing an item tooltip to multiply applicable values by the stack size. On faction-based clients, **Alt** shows Neutral auction-house data and **Ctrl** shows opposite-faction data when available.
+YAAHA displays item prices, costs, and breakdown values per individual item by default. Prospecting and milling therefore show one-fifth of a complete five-item operation. Hold **Shift** while viewing an item tooltip to multiply applicable values by the stack size. On faction-based clients, **Alt** shows Neutral auction-house data and **Ctrl** shows opposite-faction data when available.
 
 ## Options
 

@@ -26,9 +26,9 @@ local type = type
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local module = addon:NewModule("DataProcessing")
-local disenchantingData = addon:GetModule("DisenchantingData")
-local millingData = addon:GetModule("MillingData", true)
-local prospectingData = addon:GetModule("ProspectingData", true)
+local breakdownData = addon:GetModule("BreakdownData")
+local hasMillingData = addon:GetModule("MillingData", true) ~= nil
+local hasProspectingData = addon:GetModule("ProspectingData", true) ~= nil
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
 local SECONDS_PER_DAY = addon.secondsPerDay
@@ -410,65 +410,22 @@ local function BuildVendorItem(itemID, scanData)
 	return #result.auctions > 0 and result or nil
 end
 
-local function BuildDisenchantItem(itemID, scanData, priceDB, threshold)
+local function BuildBreakdownItem(scanData, breakdown, threshold)
 	if not scanData or not scanData.auctions then
 		return
 	end
-
-	local disenchant = disenchantingData:GetValue(itemID, nil, priceDB)
-	if not disenchant or not disenchant.expectedValue or disenchant.expectedValue <= 0 then
-		return
-	end
-
-	local result = {
-		expectedValue = disenchant.expectedValue,
-		auctions = {},
-	}
-	-- Equipment cannot stack, but identical copies at the same buyout are combined.
-	-- The live deal search still resolves, revalues, and purchases each physical
-	-- listing alone, so stale cached entries cannot bypass the current threshold.
-	for count, byCount in pairs(scanData.auctions) do
-		for _, byBid in pairs(byCount) do
-			for unitBuyout, numAuctions in pairs(byBid) do
-				if addon:IsBreakdownDeal(unitBuyout, disenchant.expectedValue, threshold) then
-					local key = format("%d:%d", count, unitBuyout)
-					local auction = result.auctions[key]
-					if auction then
-						auction.numAuctions = auction.numAuctions + numAuctions
-					else
-						result.auctions[key] = {
-							count = count,
-							buyout = unitBuyout * count,
-							numAuctions = numAuctions,
-						}
-					end
-				end
-			end
-		end
-	end
-
-	return next(result.auctions) and result or nil
-end
-
-local function BuildMaterialBreakdownItem(itemID, scanData, priceDB, dataModule, threshold)
-	if not dataModule or not scanData or not scanData.auctions then
-		return
-	end
-
-	local breakdown = dataModule:GetValue(itemID, nil, priceDB)
 	local expectedUnitValue = breakdown and breakdown.expectedUnitValue
 	if not expectedUnitValue or expectedUnitValue <= 0 then
 		return
 	end
 
 	local result = {
+		breakdownType = breakdown.breakdownType,
 		expectedUnitValue = expectedUnitValue,
 		auctions = {},
 	}
-	-- Prospecting and milling consume fixed recipe quantities, but neither Classic
-	-- auction stacks nor Modern commodity price-tier quantities need to be exact
-	-- multiples. Compare per item; the live client-specific search decides which
-	-- listing or arbitrary commodity quantity the player may actually purchase.
+	-- Compare every mechanic per input item. Classic equipment counts remain one,
+	-- while stacked ores and herbs multiply both cost and expected return equally.
 	for count, byCount in pairs(scanData.auctions) do
 		for _, byBid in pairs(byCount) do
 			for unitBuyout, numAuctions in pairs(byBid) do
@@ -512,8 +469,8 @@ local function ProcessScanWorker()
 	local result = {}
 	local vendorList = {}
 	local disenchantList = {}
-	local millingList = millingData and {} or nil
-	local prospectList = prospectingData and {} or nil
+	local millingList = hasMillingData and {} or nil
+	local prospectList = hasProspectingData and {} or nil
 	local scanTime = GetServerTime()
 	scanStats.lastScan = scanTime
 
@@ -541,23 +498,18 @@ local function ProcessScanWorker()
 	-- calculating them during the first loop could miss a material processed later.
 	for index = 1, #scanItemIDs do
 		local itemID = scanItemIDs[index]
-		local disenchantItem = BuildDisenchantItem(itemID, scanDB[itemID], result,
-			disenchantingThreshold)
-		if disenchantItem then
-			disenchantList[itemID] = disenchantItem
-		end
-		if millingData and millingList then
-			local millingItem = BuildMaterialBreakdownItem(itemID, scanDB[itemID], result,
-				millingData, millingThreshold)
-			if millingItem then
-				millingList[itemID] = millingItem
-			end
-		end
-		if prospectingData and prospectList then
-			local prospectingItem = BuildMaterialBreakdownItem(itemID, scanDB[itemID], result,
-				prospectingData, prospectingThreshold)
-			if prospectingItem then
-				prospectList[itemID] = prospectingItem
+		local breakdown = breakdownData:GetValue(itemID, nil, result)
+		local breakdownType = breakdown and breakdown.breakdownType
+		local threshold = breakdownType == "disenchanting" and disenchantingThreshold
+			or breakdownType == "milling" and millingThreshold
+			or breakdownType == "prospecting" and prospectingThreshold
+		local destination = breakdownType == "disenchanting" and disenchantList
+			or breakdownType == "milling" and millingList
+			or breakdownType == "prospecting" and prospectList
+		if destination and threshold then
+			local breakdownItem = BuildBreakdownItem(scanDB[itemID], breakdown, threshold)
+			if breakdownItem then
+				destination[itemID] = breakdownItem
 			end
 		end
 		processedItems = itemCount + index

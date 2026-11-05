@@ -32,7 +32,7 @@ local function ReadMerchantPrices()
 	for index = 1, GetMerchantNumItems() do
 		local price, quantity, numAvailable, isPurchasable, extendedCost = GetItemInfo(index)
 		local itemID = GetMerchantItemID(index)
-		if itemID and not professionScanner:IsKnownReagent(itemID) then
+		if itemID and not professionScanner:IsKnownVendorReagent(itemID) then
 			limitedItems[itemID] = nil
 			prices[itemID] = nil
 		elseif itemID and numAvailable and numAvailable >= 0 then
@@ -54,12 +54,12 @@ local function PruneMerchantPrices()
 	local limitedItems = addon.db.global.limitedVendorItems
 	local prices = addon.db.global.vendorBuyPrices
 	for itemID in pairs(prices) do
-		if not professionScanner:IsKnownReagent(itemID) then
+		if not professionScanner:IsKnownVendorReagent(itemID) then
 			prices[itemID] = nil
 		end
 	end
 	for itemID in pairs(limitedItems) do
-		if not professionScanner:IsKnownReagent(itemID) then
+		if not professionScanner:IsKnownVendorReagent(itemID) then
 			limitedItems[itemID] = nil
 		end
 	end

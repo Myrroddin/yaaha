@@ -119,6 +119,7 @@ L["Realm 60-day average sale value"] = true
 L["Realm 60-day sale rate"] = true
 L["Realm rolling sales per day"] = true
 L["Received auction data for the %s auction house."] = true
+L["Reagent cost"] = true
 L["Reset vendor flip profit and its outstanding item quantities?"] = true
 L["Reset vendor flip profit"] = true
 L["Restart Vendor Flips"] = true

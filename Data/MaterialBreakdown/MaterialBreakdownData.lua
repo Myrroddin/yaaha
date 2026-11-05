@@ -19,7 +19,7 @@ local module = addon:NewModule("MaterialBreakdownData")
 ---@field GetResults fun(self: VariableConversionDataModule, itemInfo: number|string): table?
 ---@field GetValue fun(self: VariableConversionDataModule, itemInfo: number|string, scope?: string, priceDB?: table): table?
 ---@field IsMaterial fun(self: VariableConversionDataModule, itemID: integer): boolean
----@field IsSource fun(self: VariableConversionDataModule, itemInfo: number|string): boolean
+---@field IsBreakable fun(self: VariableConversionDataModule, itemInfo: number|string): boolean
 ---@field RecordObservation fun(self: VariableConversionDataModule, itemInfo: number|string, loot: table<integer, number>): boolean?
 ---@field SanitizeLearnedData fun(self: VariableConversionDataModule, learnedData: table): table?, integer
 
@@ -123,7 +123,7 @@ local function CopyResults(results)
 	return copy
 end
 
-function methods:IsSource(itemInfo)
+function methods:IsBreakable(itemInfo)
 	local itemID = GetItemID(itemInfo)
 	return itemID and self.variableConversionDefinitions[itemID] ~= nil or false
 end

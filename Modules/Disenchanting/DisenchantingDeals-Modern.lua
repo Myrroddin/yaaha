@@ -92,7 +92,7 @@ local function GetCacheCounts()
 	for _, itemData in pairs(disenchantList or {}) do
 		local itemListings = 0
 		for _, auction in pairs(itemData.auctions) do
-			if auction.count == 1 and IsDisenchantingDeal(auction.buyout, itemData.expectedValue) then
+			if auction.count == 1 and IsDisenchantingDeal(auction.buyout, itemData.expectedUnitValue) then
 				itemListings = itemListings + (auction.numAuctions or 1)
 			end
 		end
