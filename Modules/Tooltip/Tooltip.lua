@@ -40,7 +40,7 @@ local inventoryAverageBuy = addon:GetModule("InventoryAverageBuy")
 local professionScanner = addon:GetModule("ProfessionScanner")
 local saleCollector = addon:GetModule("SaleCollector")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
-local storage
+local auctionDBModule
 
 -- Ordering prefixes belong only to profile settings. Keep the stored price and
 -- trend field names unchanged; each row maps its data field to its option key.
@@ -197,29 +197,29 @@ end
 
 local function GetContext(scope)
 	if usesSharedAuctionHouse then
-		return "realm", addon.db.realm, L["Shared"]
+		return "realm", addon.auctionDB.realm, L["Shared"]
 	end
 	if scope == "realm" then
-		return scope, addon.db.realm, FACTION_NEUTRAL
+		return scope, addon.auctionDB.realm, FACTION_NEUTRAL
 	elseif scope == "factionrealm" then
-		return scope, addon.db.factionrealm,
+		return scope, addon.auctionDB.factionrealm,
 			addon.localizedPlayerFaction or addon.playerFaction
 	end
 
 	-- ALT is intentionally checked first so neutral wins when both auction-house
 	-- modifiers are held. An unavailable alternate view falls back to faction data.
 	if IsAltKeyDown() then
-		if HasAuctionData(addon.db.realm) then
-			return "realm", addon.db.realm, FACTION_NEUTRAL
+		if HasAuctionData(addon.auctionDB.realm) then
+			return "realm", addon.auctionDB.realm, FACTION_NEUTRAL
 		end
 	elseif IsControlKeyDown() then
-		storage = storage or addon:GetModule("Storage")
-		local oppositeDB, oppositeName = storage:GetOppositeFactionData()
+		auctionDBModule = auctionDBModule or addon:GetModule("AuctionDB")
+		local oppositeDB, oppositeName = auctionDBModule:GetOppositeFactionData()
 		if HasAuctionData(oppositeDB) then
 			return "opposite", oppositeDB, oppositeName
 		end
 	end
-	return "factionrealm", addon.db.factionrealm,
+	return "factionrealm", addon.auctionDB.factionrealm,
 		addon.localizedPlayerFaction or addon.playerFaction
 end
 

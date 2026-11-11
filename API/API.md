@@ -2,6 +2,11 @@
 
 YAAHA exposes a deliberately small public API to other World of Warcraft addons through the global `YAAHA_API` table. It is a normal global, not a LibStub library.
 
+The release includes the required `YAAHA_AuctionDB` companion addon, which owns
+YAAHA's market-value and trend database. This storage boundary does not change
+the public contract: consumers query `YAAHA_API` and must not read either addon's
+saved variables or AceDB database directly.
+
 > [!IMPORTANT]
 > YAAHA and its public API are under active development. Names, signatures, callbacks, returned structures, and behavior may change before the first stable release. The API version remains `1` during this pre-release design period.
 
@@ -37,7 +42,7 @@ YAAHA exposes a deliberately small public API to other World of Warcraft addons 
 
 ## Quick start
 
-Declare YAAHA as a required or optional dependency in the consuming addon's TOC when it must load first. Test the global before using an optional dependency:
+Declare YAAHA as a required or optional dependency in the consuming addon's TOC when it must load first. Consumers depend on `YAAHA`, not its internal database companion. Test the global before using an optional dependency:
 
 ```lua
 if YAAHA_API then

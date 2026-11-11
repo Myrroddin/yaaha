@@ -5,6 +5,11 @@ YAAHA (Yet Another Auction House AddOn) helps World of Warcraft players understa
 > [!IMPORTANT]
 > YAAHA is under active development and is not yet ready for a public release. Features, settings, and saved data may change while the addon is being built.
 
+YAAHA requires both addon folders included in its release: `YAAHA` provides the
+features and interface, while `YAAHA_AuctionDB` owns the market-value and trend
+database in its own saved-variable file. Disabling or removing either folder
+leaves the installation incomplete.
+
 ## Features
 
 - Fast auction-house scans with minimum bids, minimum buyouts, quantities, and market values covering the current scan and rolling 3, 7, 14, 30, and 60-day periods.

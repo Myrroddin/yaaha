@@ -23,6 +23,9 @@ externals:
     url: https://github.com/Myrroddin/libaboutpanel-2.0/LibAboutPanel-2.0
     curse-slug: libaboutpanel-2-0
 
+move-folders:
+  YAAHA/YAAHA_AuctionDB: YAAHA_AuctionDB
+
 ignore:
   - Libs/LibStub/tests
   - Libs/LibDataBroker-1.1/README.textile

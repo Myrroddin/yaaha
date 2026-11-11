@@ -462,7 +462,7 @@ local function StartSearch()
 	CachePendingBids(scope)
 	queue = BuildQueue(disenchantList, scope)
 	if #queue == 0 then
-		local scanStats = scope and addon.db[scope].auctionStats
+		local scanStats = scope and addon.auctionDB[scope].auctionStats
 		if not scanStats or not scanStats.lastScan then
 			SetStatus(L["No cached disenchanting deals are available. Scan this auction house first."])
 		else

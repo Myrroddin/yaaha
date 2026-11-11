@@ -49,6 +49,7 @@ local WOW_PROJECT_MISTS_CLASSIC = WOW_PROJECT_MISTS_CLASSIC
 local WOW_PROJECT_WRATH_CLASSIC = WOW_PROJECT_WRATH_CLASSIC
 
 ---@class YAAHA: AceAddon, AceComm-3.0, AceConsole-3.0, AceEvent-3.0, AceSerializer-3.0, LibAboutPanel-2.0
+---@field auctionDB AceDBObject-3.0!
 ---@field db AceDBObject-3.0!
 ---@field FireAPIEvent fun(self: YAAHA, event: string, ...)
 ---@field GetOptions fun(self: YAAHA): table
@@ -129,9 +130,6 @@ local defaults = {
 		syncSequence = 0,
 	},
 	factionrealm = {
-		auctionDB = {},
-		compressedAuctionDB = nil,
-		auctionStats = {},
 		disenchantList = {},
 		knownProfessions = {
 			["*"] = {
@@ -190,9 +188,6 @@ local defaults = {
 		},
 	},
 	realm = {
-		auctionDB = {},
-		compressedAuctionDB = nil,
-		auctionStats = {},
 		disenchantList = {},
 		millingList = {},
 		prospectList = {},
@@ -256,7 +251,6 @@ end
 
 function addon:OnInitialize()
 	self.db = LibStub("AceDB-3.0"):New("YAAHADB", defaults, true)
-	self:GetModule("Storage"):RestoreAuctionData()
 
 	-- YAAHA stores Blizzard's display identity: name-realm on realm-based clients
 	-- and firstName surname on Forever. Link-form inputs are normalized below.
@@ -280,6 +274,12 @@ function addon:OnInitialize()
 	if (isMists or isStandard) and IsPlayerNeutral() then
 		self:RegisterEvent("NEUTRAL_FACTION_SELECT_RESULT")
 	end
+end
+
+function addon:OnEnable()
+	-- AuctionDB lives in the required YAAHA_AuctionDB companion addon. The
+	-- non-silent lookup makes an incomplete installation fail visibly.
+	self:GetModule("AuctionDB")
 end
 
 function addon:OpenConfig()
@@ -451,6 +451,8 @@ function addon:NEUTRAL_FACTION_SELECT_RESULT(event, success)
 		rawset(self.db, "faction", nil)
 		rawset(self.db, "factionrealm", nil)
 		rawset(self.db, "factionrealmregion", nil)
+		self:GetModule("AuctionDB"):RefreshFactionScope(previousFactionrealmKey,
+			factionrealmKey)
 	end
 	self:UnregisterEvent(event)
 end

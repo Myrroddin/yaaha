@@ -534,8 +534,8 @@ local function FinishProcessing(success, result, vendorList, disenchantList,
 	if success then
 		-- The live database changes only after the complete snapshot and its history
 		-- have been processed, so tooltips can never observe a half-updated scan.
-		addon.db[context.scope].auctionDB = result
-		addon.db[context.scope].auctionStats = context.scanStats
+		addon.auctionDB[context.scope].auctionDB = result
+		addon.auctionDB[context.scope].auctionStats = context.scanStats
 		addon.db[context.scope].disenchantList = disenchantList
 		if millingList then
 			addon.db[context.scope].millingList = millingList
@@ -585,7 +585,7 @@ function module:ProcessScan(scope, scanDB, scanStats, callback)
 		return false
 	end
 
-	local oldDB = addon.db[scope].auctionDB
+	local oldDB = addon.auctionDB[scope].auctionDB
 	local itemIDs = {}
 	local seen = {}
 	local scanItemIDs = {}
@@ -624,7 +624,7 @@ local function SnapshotKey(data)
 end
 
 function module:MergeSyncedMarketItem(scope, itemID, incoming, scopeDB)
-	scopeDB = scopeDB or addon.db[scope]
+	scopeDB = scopeDB or addon.auctionDB[scope]
 	local stored = scopeDB.auctionDB[itemID] or {}
 	-- Copy only synchronized market state. Deal-cache and other scope-local fields
 	-- must not leak into a peer's canonical item record during a merge.

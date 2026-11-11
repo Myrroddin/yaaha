@@ -1,0 +1,28 @@
+## Interface: 120105, 50504, 38002, 20506, 16001, 11509
+## Title: YAAHA AuctionDB
+## Notes: Stores YAAHA's auction house market data.
+## Notes-deDE: @localization(locale="deDE", key="AucDBNotes", namespace="ToC")@
+## Notes-esES: @localization(locale="esES", key="AucDBNotes", namespace="ToC")@
+## Notes-esMX: @localization(locale="esMX", key="AucDBNotes", namespace="ToC")@
+## Notes-frFR: @localization(locale="frFR", key="AucDBNotes", namespace="ToC")@
+## Notes-itIT: @localization(locale="itIT", key="AucDBNotes", namespace="ToC")@
+## Notes-koKR: @localization(locale="koKR", key="AucDBNotes", namespace="ToC")@
+## Notes-ptBR: @localization(locale="ptBR", key="AucDBNotes", namespace="ToC")@
+## Notes-ruRU: @localization(locale="ruRU", key="AucDBNotes", namespace="ToC")@
+## Notes-zhCN: @localization(locale="zhCN", key="AucDBNotes", namespace="ToC")@
+## Notes-zhTW: @localization(locale="zhTW", key="AucDBNotes", namespace="ToC")@
+## Version: @project-version@
+## Author: Sygon/Vortgar
+## X-Author-Server: Mankrik
+## X-Author-Faction: Alliance
+## X-Author-Guild: The Nightwatch
+## X-Copyright: Copyright (c) 2026 Paul Vandersypen. All Rights Reserved
+
+## Category: Auctions
+## RequiredDeps: YAAHA
+## SavedVariables: YAAHA_AuctionDBDB
+
+## X-Date: @project-date-iso@
+## IconTexture: Interface\Icons\INV_Misc_Coin_01
+
+AuctionDB.lua

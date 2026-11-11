@@ -113,9 +113,8 @@ Modules\AuctionHouse\SaleCollector.lua
 Modules\AuctionHouse\Scanner-Classic.lua [AllowLoadGameType classic] [ExcludeLoadGameType mists, forever]
 Modules\AuctionHouse\Scanner-Modern.lua [AllowLoadGameType standard, mists, forever]
 
-# Process, store, and synchronize auction and sales data
+# Process and synchronize auction and sales data
 Modules\Data\DataProcessing.lua
-Modules\Data\Storage.lua
 Modules\Data\Sync.lua
 
 # Find auction listings below their expected disenchanting value

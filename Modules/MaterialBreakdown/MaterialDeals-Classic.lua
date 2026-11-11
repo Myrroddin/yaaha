@@ -523,7 +523,7 @@ local function StartSearch(configuration)
 	CachePendingBids(scope)
 	queue = BuildQueue(configuration, dealList, scope)
 	if #queue == 0 then
-		local scanStats = scope and addon.db[scope].auctionStats
+		local scanStats = scope and addon.auctionDB[scope].auctionStats
 		if not scanStats or not scanStats.lastScan then
 			SetStatus(configuration, L[configuration.noCache])
 		else

@@ -14,8 +14,8 @@ local usesSharedAuctionHouse = addon.usesSharedAuctionHouse
 local saleCollector = addon:GetModule("SaleCollector")
 local breakdownData = addon:GetModule("BreakdownData")
 local professionScanner = addon:GetModule("ProfessionScanner")
-local storage = addon:GetModule("Storage")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
+local auctionDBModule
 
 -- API versions are independent of addon releases. Increment this only when a
 -- change to the public contract requires consumers to distinguish API behavior.
@@ -211,10 +211,16 @@ end
 
 local function GetAuctionContext(auctionHouseType)
 	local scope = GetAuctionScope(auctionHouseType)
-	if scope == "opposite" then
-		return storage:GetOppositeFactionData(), "factionrealm"
+	-- The API global is created while YAAHA loads, before the required companion
+	-- necessarily finishes opening its database. Early consumers fail closed.
+	if not addon.auctionDB then
+		return nil, scope
 	end
-	return scope and addon.db[scope] or nil, scope
+	if scope == "opposite" then
+		auctionDBModule = auctionDBModule or addon:GetModule("AuctionDB")
+		return auctionDBModule:GetOppositeFactionData(), "factionrealm"
+	end
+	return scope and addon.auctionDB[scope] or nil, scope
 end
 
 local function GetAuctionDB(auctionHouseType)
@@ -526,7 +532,8 @@ function API.GetBreakdownValue(itemID, auctionHouseType, fullResults)
 	if not auctionDB then
 		return nil
 	end
-	local scope = auctionDB == addon.db.realm.auctionDB and "realm" or "factionrealm"
+	local scope = addon.auctionDB and auctionDB == addon.auctionDB.realm.auctionDB
+		and "realm" or "factionrealm"
 	local data = breakdownData:GetValue(itemID, scope, auctionDB)
 	if not data or data.expectedUnitValue == nil then
 		return nil

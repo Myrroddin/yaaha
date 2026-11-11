@@ -275,7 +275,7 @@ function methods:GetValue(itemInfo, scope, priceDB)
 		return
 	end
 
-	local auctionDB = priceDB or addon.db[scope or "factionrealm"].auctionDB
+	local auctionDB = priceDB or addon.auctionDB[scope or "factionrealm"].auctionDB
 	local total = 0
 	local complete = true
 	for index = 1, #breakdown.results do

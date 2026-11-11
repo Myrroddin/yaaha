@@ -33,7 +33,7 @@ local collectorModules = {
 }
 local saleCollector = addon:GetModule("SaleCollector")
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
-local storage
+local auctionDBModule
 
 local COMM_PREFIX = "YAAHA1"
 local PROTOCOL_VERSION = 1
@@ -81,15 +81,15 @@ end
 -- the current character's AceDB scopes.
 local function GetScopeDB(auctionHouseType, create)
 	if usesSharedAuctionHouse and auctionHouseType == "Shared" then
-		return addon.db.realm, "realm"
+		return addon.auctionDB.realm, "realm"
 	elseif auctionHouseType == addon.playerFaction then
-		return addon.db.factionrealm, "factionrealm"
+		return addon.auctionDB.factionrealm, "factionrealm"
 	elseif auctionHouseType == "Neutral" then
-		return addon.db.realm, "realm"
+		return addon.auctionDB.realm, "realm"
 	elseif auctionHouseType == addon.oppositeFaction then
-		storage = storage or addon:GetModule("Storage")
-		local scopeDB = create and storage:GetOrCreateOppositeFactionData()
-			or storage:GetOppositeFactionData()
+		auctionDBModule = auctionDBModule or addon:GetModule("AuctionDB")
+		local scopeDB = create and auctionDBModule:GetOrCreateOppositeFactionData()
+			or auctionDBModule:GetOppositeFactionData()
 		return scopeDB, "factionrealm"
 	end
 end

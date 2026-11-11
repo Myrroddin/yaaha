@@ -1,4 +1,4 @@
--- Restores, compresses, and saves auction databases while managing opposite-faction storage.
+-- Owns, restores, compresses, and saves YAAHA's canonical auction databases.
 
 local C_AutoComplete = C_AutoComplete
 local C_EncodingUtil = C_EncodingUtil
@@ -9,19 +9,32 @@ local LibStub = LibStub
 local next = next
 local pairs = pairs
 local pcall = pcall
+local rawset = rawset
 local sort = table.sort
 local stringGsub = string.gsub
 local stringSub = string.sub
 local type = type
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
-local module = addon:NewModule("Storage", "AceEvent-3.0")
+local module = addon:NewModule("AuctionDB", "AceEvent-3.0")
 local usesSharedAuctionHouse = addon.usesSharedAuctionHouse
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
 local BASE64_VARIANT = addon.base64Variant
 local COMPRESSION_METHOD = addon.compressionMethod
 local FORMAT_VERSION = 1
+local defaults = {
+	factionrealm = {
+		auctionDB = {},
+		compressedAuctionDB = nil,
+		auctionStats = {},
+	},
+	realm = {
+		auctionDB = {},
+		compressedAuctionDB = nil,
+		auctionStats = {},
+	},
+}
 local oppositeFactionData
 local oppositeFactionKey
 local oppositeFactionLoaded = false
@@ -106,8 +119,8 @@ local function LoadOppositeFactionData()
 		return
 	end
 
-	-- AceDB exposes only the active faction-realm directly. Read the raw scopes to
-	-- find the freshest opposite-faction database from this Connected Realm group.
+	-- AceDB exposes only the active faction-realm directly. Read AuctionDB's raw
+	-- scopes to find the freshest opposite-faction database in the realm group.
 	local connectedRealms = {}
 	local currentRealm = GetNormalizedRealmName()
 	if currentRealm then
@@ -121,7 +134,7 @@ local function LoadOppositeFactionData()
 
 	local prefix = addon.oppositeFaction .. " - "
 	local candidates = {}
-	for key, scopeDB in pairs(addon.db.sv.factionrealm or {}) do
+	for key, scopeDB in pairs(module.db.sv.factionrealm or {}) do
 		if stringSub(key, 1, #prefix) == prefix then
 			local realm = NormalizeRealmName(stringSub(key, #prefix + 1))
 			if realm and connectedRealms[realm] then
@@ -163,14 +176,14 @@ local function CreateOppositeFactionData()
 		return
 	end
 	oppositeFactionKey = addon.oppositeFaction .. " - " .. realm
-	local scopes = addon.db.sv.factionrealm
+	local scopes = module.db.sv.factionrealm
 	scopes[oppositeFactionKey] = scopes[oppositeFactionKey] or {}
 	oppositeFactionData = InitializeFactionScope(scopes[oppositeFactionKey])
 	return oppositeFactionData
 end
 
 local function RestoreScope(scope)
-	local scopeDB = addon.db[scope]
+	local scopeDB = module.db[scope]
 	local stored = scopeDB.compressedAuctionDB
 	if stored == nil then
 		return
@@ -202,18 +215,18 @@ local function RestoreScope(scope)
 		return
 	end
 
-	-- Keep the preceding valid payload in memory so the next save can retain one
-	-- recoverable generation without leaving a second decompressed table resident.
+	-- Retain the preceding valid payload in memory so the next save can keep one
+	-- recoverable generation without a second decompressed database in memory.
 	previousPayloads[scope] = restoredPayload
 	scopeDB.auctionDB = auctionDB
 	scopeDB.compressedAuctionDB = nil
 end
 
 local function StoreScope(scope)
-	local scopeDB = addon.db[scope]
+	local scopeDB = module.db[scope]
 	if restoreFailed[scope] then
-		-- Never replace an unreadable payload with the empty AceDB default. Keeping
-		-- the original bytes gives a future YAAHA fix or manual recovery a chance.
+		-- Never replace unreadable bytes with an empty default; a later fix or manual
+		-- recovery may still be able to restore the original compressed payload.
 		return
 	end
 
@@ -225,8 +238,8 @@ local function StoreScope(scope)
 
 	local payload = EncodeAuctionDB(auctionDB)
 	if not payload then
-		-- Compression is transactional: the ordinary table remains available for
-		-- Blizzard's SavedVariables writer whenever any encoding stage fails.
+		-- Compression is transactional. If encoding fails, Blizzard's ordinary
+		-- SavedVariables writer still receives the decompressed table.
 		return
 	end
 
@@ -238,16 +251,17 @@ local function StoreScope(scope)
 	scopeDB.auctionDB = nil
 end
 
+function module:OnInitialize()
+	self.db = LibStub("AceDB-3.0"):New("YAAHA_AuctionDBDB", defaults, true)
+	addon.auctionDB = self.db
+	for index = 1, #SCOPES do
+		RestoreScope(SCOPES[index])
+	end
+end
+
 function module:OnEnable()
 	LoadOppositeFactionData()
 	self:RegisterEvent("PLAYER_LOGOUT")
-end
-
-function module:RestoreAuctionData()
-	for index = 1, #SCOPES do
-		local scope = SCOPES[index]
-		RestoreScope(scope)
-	end
 end
 
 function module:GetOppositeFactionData()
@@ -264,10 +278,28 @@ function module:GetOrCreateOppositeFactionData()
 	return oppositeFactionData or CreateOppositeFactionData(), addon.oppositeFactionName
 end
 
+function module:RefreshFactionScope(previousFactionrealmKey, factionrealmKey)
+	local db = self.db
+	if not db or db.keys.factionrealm == factionrealmKey then
+		return
+	end
+	local factionrealmregionKey = db.keys.factionrealmregion
+	db.keys.faction = addon.playerFaction
+	db.keys.factionrealm = factionrealmKey
+	if factionrealmregionKey then
+		db.keys.factionrealmregion = factionrealmKey
+			.. factionrealmregionKey:sub(#previousFactionrealmKey + 1)
+	end
+	rawset(db, "faction", nil)
+	rawset(db, "factionrealm", nil)
+	rawset(db, "factionrealmregion", nil)
+	oppositeFactionLoaded = false
+	LoadOppositeFactionData()
+end
+
 function module:PLAYER_LOGOUT()
 	for index = 1, #SCOPES do
-		local scope = SCOPES[index]
-		StoreScope(scope)
+		StoreScope(SCOPES[index])
 	end
 	if oppositeFactionData then
 		local auctionDB = oppositeFactionData.auctionDB
