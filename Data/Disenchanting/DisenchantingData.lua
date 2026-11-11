@@ -1,6 +1,7 @@
 -- Defines disenchanting eligibility, result ranges, learned observations, and expected values.
 
 local C_Item = C_Item
+local Enum = Enum
 local format = string.format
 local LibStub = LibStub
 local max = math.max
@@ -23,6 +24,7 @@ local module = addon:NewModule("DisenchantingData")
 
 local ARMOR = 4
 local WEAPON = 2
+local PROFESSION = Enum and Enum.ItemClass and Enum.ItemClass.Profession
 local UNCOMMON = 2
 local RARE = 3
 local EPIC = 4
@@ -39,6 +41,9 @@ local data = {
 	[WEAPON] = { [UNCOMMON] = {}, [RARE] = {}, [EPIC] = {} },
 	[ARMOR] = { [UNCOMMON] = {}, [RARE] = {}, [EPIC] = {} },
 }
+if PROFESSION then
+	data[PROFESSION] = { [UNCOMMON] = {}, [RARE] = {}, [EPIC] = {} }
+end
 
 local materials = {}
 local nonDisenchantable = {}
@@ -253,13 +258,32 @@ local function Result(itemID, chance, minQuantity, maxQuantity, expectedQuantity
 	}
 end
 
-local function AddRange(classID, quality, minItemLevel, maxItemLevel, requiredSkill, results)
+local function AddRange(classID, quality, minItemLevel, maxItemLevel, requiredSkill,
+	results, expansionID)
+	if not data[classID] then
+		data[classID] = { [UNCOMMON] = {}, [RARE] = {}, [EPIC] = {} }
+	end
 	data[classID][quality][#data[classID][quality] + 1] = {
 		minItemLevel = minItemLevel,
 		maxItemLevel = maxItemLevel,
 		requiredSkill = requiredSkill,
 		results = results,
+		expansionID = expansionID,
 	}
+end
+
+-- Client-specific files register their ranges after this shared engine loads.
+-- Mists uses its own complete baseline, while Standard must additionally match
+-- the source item's expansion because its repeated item-level squishes overlap.
+function module:RegisterRange(classID, quality, minItemLevel, maxItemLevel,
+	requiredSkill, results, expansionID)
+	AddRange(classID, quality, minItemLevel, maxItemLevel, requiredSkill,
+		results, expansionID)
+end
+
+function module:CreateResult(itemID, chance, minQuantity, maxQuantity,
+	expectedQuantity)
+	return Result(itemID, chance, minQuantity, maxQuantity, expectedQuantity)
 end
 
 local function AddSharedRange(quality, minItemLevel, maxItemLevel, requiredSkill, results)
@@ -354,22 +378,24 @@ local function GetItemDetails(itemInfo)
 	if not itemID or nonDisenchantable[itemID] then
 		return
 	end
-	local _, link, quality, itemLevel, _, _, _, _, _, _, _, classID = C_Item.GetItemInfo(itemInfo)
-	if not link or quality < UNCOMMON or quality > EPIC or classID ~= WEAPON and classID ~= ARMOR then
+	local _, link, quality, itemLevel, _, _, _, _, _, _, _, classID, _, _, expansionID =
+		C_Item.GetItemInfo(itemInfo)
+	if not link or quality < UNCOMMON or quality > EPIC or not data[classID] then
 		return
 	end
 	itemLevel = C_Item.GetDetailedItemLevelInfo(link) or itemLevel
-	return itemID, link, quality, itemLevel, classID
+	return itemID, link, quality, itemLevel, classID, expansionID
 end
 
-local function FindRange(classID, quality, itemLevel)
+local function FindRange(classID, quality, itemLevel, expansionID)
 	local ranges = data[classID] and data[classID][quality]
 	if not ranges then
 		return
 	end
 	for index = 1, #ranges do
 		local range = ranges[index]
-		if itemLevel >= range.minItemLevel and itemLevel <= range.maxItemLevel then
+		if itemLevel >= range.minItemLevel and itemLevel <= range.maxItemLevel
+			and (range.expansionID == nil or range.expansionID == expansionID) then
 			return range
 		end
 	end
@@ -390,7 +416,10 @@ local function CopyResults(range)
 	return results
 end
 
-local function GetLearnedKey(classID, quality, itemLevel)
+local function GetLearnedKey(classID, quality, itemLevel, expansionID)
+	if isStandard then
+		return format("%d:%d:%d:%d", classID, quality, itemLevel, expansionID)
+	end
 	return format("%d:%d:%d", classID, quality, itemLevel)
 end
 
@@ -470,20 +499,25 @@ function module:GetItemDetails(itemInfo)
 	return GetItemDetails(itemInfo)
 end
 
+function module:IsBreakable(itemInfo)
+	local itemID, _, quality, itemLevel, classID, expansionID = GetItemDetails(itemInfo)
+	return itemID and FindRange(classID, quality, itemLevel, expansionID) ~= nil or false
+end
+
 function module:IsMaterial(itemID)
 	return materials[itemID] == true
 end
 
 function module:GetResults(itemInfo)
-	local itemID, _, quality, itemLevel, classID = GetItemDetails(itemInfo)
-	local range = itemID and FindRange(classID, quality, itemLevel)
+	local itemID, _, quality, itemLevel, classID, expansionID = GetItemDetails(itemInfo)
+	local range = itemID and FindRange(classID, quality, itemLevel, expansionID)
 	if not range then
 		return
 	end
 
 	local results = CopyResults(range)
 	local aggregate = { samples = 0, results = {} }
-	local learnedKey = GetLearnedKey(classID, quality, itemLevel)
+	local learnedKey = GetLearnedKey(classID, quality, itemLevel, expansionID)
 	local learned = addon.db.global.disenchantData[learnedKey]
 	local byItemID = {}
 	for index = 1, #results do
@@ -532,6 +566,7 @@ function module:GetResults(itemInfo)
 	return {
 		itemID = itemID,
 		classID = classID,
+		expansionID = expansionID,
 		quality = quality,
 		itemLevel = itemLevel,
 		requiredSkill = range.requiredSkill,
@@ -544,12 +579,14 @@ function module:SanitizeLearnedData(learnedData)
 	local sanitized = {}
 	local sampleCount = 0
 	for learnedKey, learned in pairs(type(learnedData) == "table" and learnedData or {}) do
-		local classID, quality, itemLevel
+		local classID, quality, itemLevel, expansionID
 		if type(learnedKey) == "string" then
-			classID, quality, itemLevel = stringMatch(learnedKey, "^(%d+):(%d+):(%d+)$")
+			classID, quality, itemLevel, expansionID =
+				stringMatch(learnedKey, "^(%d+):(%d+):(%d+):?(%d*)$")
 		end
-		classID, quality, itemLevel = tonumber(classID), tonumber(quality), tonumber(itemLevel)
-		local range = classID and FindRange(classID, quality, itemLevel)
+		classID, quality, itemLevel, expansionID = tonumber(classID), tonumber(quality),
+			tonumber(itemLevel), tonumber(expansionID)
+		local range = classID and FindRange(classID, quality, itemLevel, expansionID)
 		local copy = range and CopyLearnedRange(learned, GetAllowedResults(range))
 		if copy then
 			sanitized[learnedKey] = copy
@@ -560,8 +597,8 @@ function module:SanitizeLearnedData(learnedData)
 end
 
 function module:RecordObservation(itemInfo, loot)
-	local _, _, quality, itemLevel, classID = GetItemDetails(itemInfo)
-	local range = classID and FindRange(classID, quality, itemLevel)
+	local _, _, quality, itemLevel, classID, expansionID = GetItemDetails(itemInfo)
+	local range = classID and FindRange(classID, quality, itemLevel, expansionID)
 	if not range then
 		return
 	end
@@ -577,7 +614,7 @@ function module:RecordObservation(itemInfo, loot)
 		return
 	end
 
-	local key = GetLearnedKey(classID, quality, itemLevel)
+	local key = GetLearnedKey(classID, quality, itemLevel, expansionID)
 	local learned = addon.db.global.disenchantData[key]
 	if not LearnedRangeIsValid(learned, allowed) then
 		learned = { samples = 0, results = {} }

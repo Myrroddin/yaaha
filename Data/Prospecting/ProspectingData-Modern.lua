@@ -1,7 +1,11 @@
 -- Maps Mists and Standard prospecting sources to expected material yields.
 -- The Mists baseline contains Vanilla through Mists as represented by TSM's
 -- Mists data. Standard replaces it with current data through Shadowlands;
--- Dragonflight and later require profession-specialization modeling.
+-- Dragonflight and later require profession-specialization modeling. Their
+-- Jewelcrafting traits can change output quality or yield for the current
+-- character, so they cannot be represented by one universal static result.
+-- Mining traits affect gathering ore and do not modify prospecting.
+-- https://www.wowhead.com/profession-traits/jewelcrafting
 
 local LibStub = LibStub
 

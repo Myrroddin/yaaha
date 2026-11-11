@@ -40,6 +40,7 @@ local UNKNOWN = UNKNOWN
 
 local MINING_SPELL_ID = 2575
 local SMELTING_SPELL_ID = 2656
+local PRIMARY_PROFESSION_SLOT_COUNT = 2
 local PROFESSION_SLOT_COUNT = 5
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
@@ -58,6 +59,9 @@ local ignoreTradeSkillUpdatesUntil = 0
 local craftScanAttempt = 1
 local tradeSkillScanAttempt = 1
 local professionSlots = {}
+local professionReconcilePending = false
+local professionReconcileAttempt = 1
+local professionReconcileAllowEmpty = false
 
 local function GetSpellName(spellID)
 	local info = C_Spell.GetSpellInfo(spellID)
@@ -145,17 +149,86 @@ local function GetProfessionIdentity(name)
 	end
 end
 
-local function ShouldRemoveProfession(_, profession, skillLines)
-	return (not profession.collector or profession.collector == "classic")
-		and profession.skillLineName and not skillLines[profession.skillLineName]
-end
-
-local function ReconcileProfessions()
-	local skillLines = ReadSkillLines()
-	if not skillLines then
+local function ReadPrimaryProfessions(allowEmpty)
+	professionSlots[1], professionSlots[2], professionSlots[3],
+		professionSlots[4], professionSlots[5] = GetProfessions()
+	local primaryProfessions = {
+		ids = {},
+		names = {},
+	}
+	local hasProfession = false
+	for slot = 1, PRIMARY_PROFESSION_SLOT_COUNT do
+		local professionIndex = professionSlots[slot]
+		if professionIndex then
+			local professionName, _, _, _, _, _, skillLineID =
+				GetProfessionInfo(professionIndex)
+			-- A populated slot without its details means Blizzard is still
+			-- rebuilding profession data. Never prune from an incomplete snapshot.
+			if not professionName then
+				return
+			end
+			hasProfession = true
+			primaryProfessions.names[professionName] = true
+			if skillLineID then
+				primaryProfessions.ids[skillLineID] = true
+			end
+		end
+	end
+	if not hasProfession and not allowEmpty then
 		return
 	end
-	module:RemoveProfessions(ShouldRemoveProfession, skillLines)
+	return primaryProfessions
+end
+
+local function ShouldRemoveProfession(_, profession, primaryProfessions)
+	if (profession.collector and profession.collector ~= "classic")
+		or profession.isPrimary ~= true then
+		return false
+	end
+	local knownByID = profession.skillLineID
+		and primaryProfessions.ids[profession.skillLineID]
+	local knownByName = profession.skillLineName
+		and primaryProfessions.names[profession.skillLineName]
+	return not knownByID and not knownByName
+end
+
+local function ReconcileProfessions(allowEmpty)
+	local primaryProfessions = ReadPrimaryProfessions(allowEmpty)
+	if not primaryProfessions then
+		return false
+	end
+	-- Secondary professions are permanent once learned. Only forgotten primary
+	-- professions invalidate their saved recipes and reagent indexes.
+	module:RemoveProfessions(ShouldRemoveProfession, primaryProfessions)
+	return true
+end
+
+local RunProfessionReconcile
+
+local function QueueProfessionReconcile(allowEmpty)
+	professionReconcileAllowEmpty = professionReconcileAllowEmpty or allowEmpty
+	professionReconcileAttempt = 1
+	if professionReconcilePending then
+		return
+	end
+	professionReconcilePending = true
+	C_Timer.After(0, RunProfessionReconcile)
+end
+
+RunProfessionReconcile = function()
+	professionReconcilePending = false
+	if ReconcileProfessions(professionReconcileAllowEmpty) then
+		professionReconcileAllowEmpty = false
+		return
+	end
+	if professionReconcileAttempt < 10 then
+		-- TSM likewise retries while Blizzard is still populating profession info.
+		professionReconcileAttempt = professionReconcileAttempt + 1
+		professionReconcilePending = true
+		C_Timer.After(0.1, RunProfessionReconcile)
+	else
+		professionReconcileAllowEmpty = false
+	end
 end
 
 local function ReadReagents(index, isCraft)
@@ -170,9 +243,11 @@ local function ReadReagents(index, isCraft)
 		local itemID = addon:GetItemID(link)
 		local quantity
 		if isCraft then
-			_, _, quantity = GetCraftReagentInfo(index, reagentIndex)
+			local _, _, reagentQuantity = GetCraftReagentInfo(index, reagentIndex)
+			quantity = reagentQuantity
 		else
-			_, _, quantity = GetTradeSkillReagentInfo(index, reagentIndex)
+			local _, _, reagentQuantity = GetTradeSkillReagentInfo(index, reagentIndex)
+			quantity = reagentQuantity
 		end
 		if not itemID or not quantity or quantity <= 0 then
 			return nil, false
@@ -442,8 +517,8 @@ function module:CRAFT_UPDATE()
 end
 
 function module:SKILL_LINES_CHANGED()
-	-- Let Blizzard finish updating skill lines before pruning saved professions.
-	C_Timer.After(0, ReconcileProfessions)
+	-- An empty primary-profession list is valid after abandoning the last one.
+	QueueProfessionReconcile(true)
 end
 
 function module:OnEnable()
@@ -452,6 +527,7 @@ function module:OnEnable()
 	self:RegisterEvent("CRAFT_SHOW")
 	self:RegisterEvent("CRAFT_UPDATE")
 	self:RegisterEvent("SKILL_LINES_CHANGED")
-	-- Defer login reconciliation until Blizzard's skill-line data has settled.
-	C_Timer.After(0, ReconcileProfessions)
+	-- Empty results during login are ambiguous. Retry incomplete data, but retain
+	-- saved professions until a skill-line change confirms an empty primary list.
+	QueueProfessionReconcile(false)
 end

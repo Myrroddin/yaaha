@@ -10,15 +10,21 @@ local LibStub = LibStub
 local type = type
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
+local isStandard = addon.isStandard
 local ALCHEMY_SKILL_LINE = addon.alchemySkillLineID
 local module = addon:GetModule("ProfessionScanner")
+local craftingStatData = addon:GetModule("CraftingStatData", true)
 
-local PROFESSION_SLOT_COUNT = 5
+local PRIMARY_PROFESSION_SLOT_COUNT = 2
 
 local scanPending = false
 local scanning = false
 local scanAttempt = 1
+local professionOpen = false
 local professionSlots = {}
+local professionReconcilePending = false
+local professionReconcileAttempt = 1
+local professionReconcileAllowEmpty = false
 
 local function IsExternalProfession()
 	return C_TradeSkillUI.IsNPCCrafting()
@@ -87,6 +93,10 @@ local function ReadReagentSlots(schematic)
 			-- incorrectly low crafting value.
 			slots[#slots + 1] = {
 				quantity = slot.quantityRequired,
+				-- Required modifying reagents remain part of the recipe cost, but
+				-- Resourcefulness only refunds basic reagents. TSM makes the same
+				-- distinction by separating refundable and non-refundable costs.
+				resourcefulnessEligible = isBasic,
 				items = items,
 			}
 		end
@@ -137,6 +147,13 @@ local function ReadRecipe(recipeID, recipeInfo, rank, isAlchemy)
 		and schematic.quantityMin or 1
 	local maxMade = schematic.quantityMax and schematic.quantityMax > 0
 		and schematic.quantityMax or minMade
+	local resourcefulnessChance, multicraftChance = 0, 0
+	local expectedResourcefulnessRefund, expectedMulticraftYield = 0, 0
+	if craftingStatData then
+		resourcefulnessChance, multicraftChance,
+			expectedResourcefulnessRefund, expectedMulticraftYield =
+			craftingStatData:GetExpectedRates(recipeID)
+	end
 	return {
 		name = recipeInfo.name or schematic.name,
 		spellID = recipeID,
@@ -148,6 +165,10 @@ local function ReadRecipe(recipeID, recipeInfo, rank, isAlchemy)
 		rank = rank,
 		minMade = minMade,
 		maxMade = maxMade,
+		resourcefulnessChance = resourcefulnessChance,
+		multicraftChance = multicraftChance,
+		expectedResourcefulnessRefund = expectedResourcefulnessRefund,
+		expectedMulticraftYield = expectedMulticraftYield,
 		reagentSlots = ReadReagentSlots(schematic),
 	}
 end
@@ -176,6 +197,9 @@ local function ScanProfession()
 		return false
 	end
 	scanning = true
+	if craftingStatData then
+		craftingStatData:ClearCache()
+	end
 	local recipeIDs = C_TradeSkillUI.GetAllRecipeIDs()
 	if not recipeIDs or #recipeIDs == 0 then
 		scanning = false
@@ -256,23 +280,71 @@ end
 local function ShouldRemoveProfession(_, profession, learnedSkillLines)
 	local parentSkillLineID = profession.parentSkillLineID or profession.skillLineID
 	return profession.collector == "modern"
+		and profession.isPrimary == true
 		and parentSkillLineID and not learnedSkillLines[parentSkillLineID]
 end
 
-local function ReconcileProfessions()
+local function ReadPrimaryProfessions(allowEmpty)
 	local learnedSkillLines = {}
 	professionSlots[1], professionSlots[2], professionSlots[3],
 		professionSlots[4], professionSlots[5] = GetProfessions()
-	for slot = 1, PROFESSION_SLOT_COUNT do
+	local hasProfession = false
+	for slot = 1, PRIMARY_PROFESSION_SLOT_COUNT do
 		local professionIndex = professionSlots[slot]
 		if professionIndex then
 			local _, _, _, _, _, _, skillLineID = GetProfessionInfo(professionIndex)
-			if skillLineID then
-				learnedSkillLines[skillLineID] = true
+			-- A populated slot without its skill line means Blizzard has not
+			-- finished rebuilding profession data. Do not prune from that snapshot.
+			if not skillLineID then
+				return
 			end
+			hasProfession = true
+			learnedSkillLines[skillLineID] = true
 		end
 	end
+	if not hasProfession and not allowEmpty then
+		return
+	end
+	return learnedSkillLines
+end
+
+local function ReconcileProfessions(allowEmpty)
+	local learnedSkillLines = ReadPrimaryProfessions(allowEmpty)
+	if not learnedSkillLines then
+		return false
+	end
+	-- One parent profession can own several expansion skill lines. Removing the
+	-- parent clears every saved branch, while permanent secondary professions stay.
 	module:RemoveProfessions(ShouldRemoveProfession, learnedSkillLines)
+	return true
+end
+
+local RunProfessionReconcile
+
+local function QueueProfessionReconcile(allowEmpty)
+	professionReconcileAllowEmpty = professionReconcileAllowEmpty or allowEmpty
+	professionReconcileAttempt = 1
+	if professionReconcilePending then
+		return
+	end
+	professionReconcilePending = true
+	C_Timer.After(0, RunProfessionReconcile)
+end
+
+RunProfessionReconcile = function()
+	professionReconcilePending = false
+	if ReconcileProfessions(professionReconcileAllowEmpty) then
+		professionReconcileAllowEmpty = false
+		return
+	end
+	if professionReconcileAttempt < 10 then
+		-- TSM likewise retries while Blizzard is still populating profession info.
+		professionReconcileAttempt = professionReconcileAttempt + 1
+		professionReconcilePending = true
+		C_Timer.After(0.1, RunProfessionReconcile)
+	else
+		professionReconcileAllowEmpty = false
+	end
 end
 
 function module:GetCraftRecipeSpellID(recipeID)
@@ -285,7 +357,12 @@ function module:GetTradeSkillRecipeSpellID(recipeID)
 end
 
 function module:TRADE_SKILL_SHOW()
+	professionOpen = true
 	QueueScan()
+end
+
+function module:TRADE_SKILL_CLOSE()
+	professionOpen = false
 end
 
 function module:TRADE_SKILL_LIST_UPDATE()
@@ -300,17 +377,37 @@ function module:NEW_RECIPE_LEARNED()
 	QueueScan(0.05)
 end
 
+function module:PROFESSION_EQUIPMENT_CHANGED()
+	if professionOpen then
+		QueueScan(0.05)
+	end
+end
+
+function module:SKILL_LINE_SPECS_RANKS_CHANGED()
+	if professionOpen then
+		QueueScan(0.05)
+	end
+end
+
 function module:SKILL_LINES_CHANGED()
-	-- Let Blizzard finish updating skill lines before pruning saved professions.
-	C_Timer.After(0, ReconcileProfessions)
+	-- An empty primary-profession list is valid after abandoning the last one.
+	QueueProfessionReconcile(true)
 end
 
 function module:OnEnable()
 	self:RegisterEvent("TRADE_SKILL_SHOW")
+	self:RegisterEvent("TRADE_SKILL_CLOSE")
 	self:RegisterEvent("TRADE_SKILL_LIST_UPDATE")
 	self:RegisterEvent("TRADE_SKILL_DATA_SOURCE_CHANGED")
 	self:RegisterEvent("NEW_RECIPE_LEARNED")
 	self:RegisterEvent("SKILL_LINES_CHANGED")
-	-- Defer login reconciliation until Blizzard's skill-line data has settled.
-	C_Timer.After(0, ReconcileProfessions)
+	if isStandard then
+		-- Profession equipment and specialization perks both alter the live
+		-- Resourcefulness and Multicraft expectations saved with each recipe.
+		self:RegisterEvent("PROFESSION_EQUIPMENT_CHANGED")
+		self:RegisterEvent("SKILL_LINE_SPECS_RANKS_CHANGED")
+	end
+	-- Empty results during login are ambiguous. Retry incomplete data, but retain
+	-- saved professions until a skill-line change confirms an empty primary list.
+	QueueProfessionReconcile(false)
 end

@@ -25,7 +25,6 @@ local stringGsub = string.gsub
 local stringMatch = string.match
 local tableRemove = table.remove
 local type = type
-local UnitGUID = UnitGUID
 local wipe = wipe
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
@@ -785,13 +784,14 @@ local function CacheModernBids()
 		return
 	end
 
-	local playerGUID = UnitGUID("player")
+	local playerGUID = addon:GetPlayerGUID()
 	---@diagnostic disable-next-line: wrong-flavor-api
 	for _, bid in ipairs(C_AuctionHouse.GetBids()) do
 		-- GUIDs are trusted only in this live session. The saved record deliberately
 		-- keeps the stable auction ID and amount instead, so relogging cannot make an
 		-- old GUID either lose protection or protect an auction after an alt is outbid.
-		if bid.bidder == playerGUID and bid.bidAmount and bid.bidAmount > 0 then
+		if playerGUID and addon:IsValueAccessible(bid.bidder)
+			and bid.bidder == playerGUID and bid.bidAmount and bid.bidAmount > 0 then
 			RecordModernPendingPurchase(bid.auctionID, bid.bidAmount, "bid", nil, bid)
 		end
 	end
@@ -1355,7 +1355,8 @@ end
 
 function module:IsModernAccountHighBidder(result, itemID, pendingBids)
 	if result.containsOwnerItem or result.containsAccountItem
-		or result.bidder and result.bidder == UnitGUID("player") then
+		or addon:IsValueAccessible(result.bidder)
+		and result.bidder and result.bidder == addon:GetPlayerGUID() then
 		return true
 	end
 

@@ -90,6 +90,7 @@ Data\DerivedMaterial\DerivedMaterialData.lua
 
 # Define disenchanting eligibility, yields, observations, and expected values
 Data\Disenchanting\DisenchantingData.lua
+Data\Disenchanting\DisenchantingData-Modern.lua [AllowLoadGameType standard, mists]
 
 # Map enchanting recipes to tangible items and compatible vellums
 Data\Enchanting\EnchantingCraftData-Classic.lua [AllowLoadGameType classic, forever] [ExcludeLoadGameType mists]
@@ -129,6 +130,7 @@ Modules\MaterialBreakdown\MaterialDeals-Classic.lua [AllowLoadGameType tbc, wrat
 Modules\MaterialBreakdown\MaterialDeals-Modern.lua [AllowLoadGameType standard, mists]
 
 # Store and scan known profession recipes
+Data\Professions\CraftingStatData.lua [AllowLoadGameType standard]
 Modules\Professions\ProfessionData.lua
 Modules\Professions\ProfessionScanner-Classic.lua [AllowLoadGameType classic]
 Modules\Professions\ProfessionScanner-Modern.lua [AllowLoadGameType standard, forever]

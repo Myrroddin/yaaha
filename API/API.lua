@@ -90,13 +90,21 @@ local API_VERSION = 1
 ---@field unitValue integer Selected per-unit value in copper.
 ---@field totalValue integer Selected value of the required quantity in copper.
 ---@field source YAAHA_API.MaterialValueSource Source which supplied the reagent's lowest value.
+---@field resourcefulnessEligible boolean Whether this required reagent contributes to expected Resourcefulness savings.
 ---@field conversion? YAAHA_API.CraftingConversion Single-source conversion details when `source` is `"convert"`; absent for averaged conversion families.
 ---@field crafting? YAAHA_API.CraftingResult Nested recipe details when `source` is `"crafting"`.
 
 ---@class YAAHA_API.CraftingResult
 ---@field value integer Per-unit crafting value in copper.
----@field totalReagentValue integer Reagent value for one recipe cast in copper.
----@field outputQuantity number Average number of items produced per cast.
+---@field totalReagentValue integer Raw reagent value for one recipe cast in copper, before Resourcefulness.
+---@field expectedReagentValue integer Expected reagent value after Resourcefulness.
+---@field resourcefulnessSavings integer Expected Resourcefulness savings per cast in copper.
+---@field outputQuantity number Base average number of items produced per cast.
+---@field effectiveOutputQuantity number Expected average output per cast after Multicraft.
+---@field resourcefulnessChance number Recipe-specific Resourcefulness proc chance from `0` to `1`.
+---@field multicraftChance number Recipe-specific Multicraft proc chance from `0` to `1`.
+---@field expectedResourcefulnessRefund number Expected fraction of eligible reagent value refunded per cast.
+---@field expectedMulticraftYield number Expected extra output as a fraction of base output per cast.
 ---@field expectedOutputMultiplier number Expected finished-item auction-return multiplier from an applicable Alchemy specialization; `1`, `1.2`, or `1.4`. This does not reduce crafting or material costs.
 ---@field character string Canonical character identity whose known recipe was used (`name-realm` or Forever's `firstName surname`).
 ---@field profession string Localized profession name.
@@ -258,8 +266,12 @@ local function SortAuctionResults(left, right)
 	return left[1] < right[1]
 end
 
+local function IsPositiveInteger(value)
+	return type(value) == "number" and value > 0 and value == floor(value)
+end
+
 local function GetItemSource(itemID, auctionHouseType)
-	if type(itemID) ~= "number" or itemID <= 0 or itemID ~= floor(itemID) then
+	if not IsPositiveInteger(itemID) then
 		return nil
 	end
 
@@ -273,7 +285,7 @@ local function GetItemValue(itemID, auctionHouseType, field)
 end
 
 local function GetRealmRollingSaleMetrics(itemID, auctionHouseType)
-	if type(itemID) ~= "number" or itemID <= 0 or itemID ~= floor(itemID) then
+	if not IsPositiveInteger(itemID) then
 		return
 	end
 	auctionHouseType = ResolveAuctionHouseType(auctionHouseType)
@@ -479,7 +491,7 @@ end
 ---@param itemID integer
 ---@return boolean isBreakable
 function API.IsBreakable(itemID)
-	if type(itemID) ~= "number" or itemID <= 0 or itemID ~= floor(itemID) then
+	if not IsPositiveInteger(itemID) then
 		return false
 	end
 	return breakdownData:IsBreakable(itemID)
@@ -488,7 +500,7 @@ end
 ---@param itemID integer
 ---@return YAAHA_API.BreakdownResults? results
 function API.GetBreakdownResults(itemID)
-	if type(itemID) ~= "number" or itemID <= 0 or itemID ~= floor(itemID) then
+	if not IsPositiveInteger(itemID) then
 		return nil
 	end
 	local source = breakdownData:GetResults(itemID)
@@ -522,7 +534,7 @@ end
 ---@overload fun(itemID: integer, auctionHouseType: YAAHA_API.AuctionHouseType|nil, fullResults: true): YAAHA_API.PricedBreakdownResults?
 ---@return integer|YAAHA_API.PricedBreakdownResults|nil value
 function API.GetBreakdownValue(itemID, auctionHouseType, fullResults)
-	if type(itemID) ~= "number" or itemID <= 0 or itemID ~= floor(itemID) then
+	if not IsPositiveInteger(itemID) then
 		return nil
 	end
 	if fullResults ~= nil and type(fullResults) ~= "boolean" then
@@ -586,7 +598,14 @@ function CopyCraftingResult(source)
 	local result = {
 		value = NormalizeRequiredCopper(source.value),
 		totalReagentValue = NormalizeRequiredCopper(source.totalReagentValue),
+		expectedReagentValue = NormalizeRequiredCopper(source.expectedReagentValue),
+		resourcefulnessSavings = NormalizeRequiredCopper(source.resourcefulnessSavings),
 		outputQuantity = source.outputQuantity,
+		effectiveOutputQuantity = source.effectiveOutputQuantity,
+		resourcefulnessChance = source.resourcefulnessChance,
+		multicraftChance = source.multicraftChance,
+		expectedResourcefulnessRefund = source.expectedResourcefulnessRefund,
+		expectedMulticraftYield = source.expectedMulticraftYield,
 		expectedOutputMultiplier = source.expectedOutputMultiplier,
 		character = source.character,
 		profession = source.profession,
@@ -604,6 +623,7 @@ function CopyCraftingResult(source)
 			unitValue = NormalizeRequiredCopper(material.unitValue),
 			totalValue = NormalizeRequiredCopper(material.totalValue),
 			source = material.source,
+			resourcefulnessEligible = material.resourcefulnessEligible,
 		}
 		if material.source == "convert" and material.detail and material.detail.itemID then
 			copy.conversion = {
@@ -620,7 +640,7 @@ function CopyCraftingResult(source)
 end
 
 local function ValidateCraftingArguments(id, fullResults, currentCharacterOnly)
-	return type(id) == "number" and id > 0 and id == floor(id)
+	return IsPositiveInteger(id)
 		and (fullResults == nil or type(fullResults) == "boolean")
 		and (currentCharacterOnly == nil or type(currentCharacterOnly) == "boolean")
 end
@@ -752,7 +772,7 @@ function API.GetPriceSourceValue(priceSource, itemID, auctionHouseType)
 	if not definition then
 		return nil, errorMessage
 	end
-	if type(itemID) ~= "number" or itemID <= 0 or itemID ~= floor(itemID) then
+	if not IsPositiveInteger(itemID) then
 		return nil, "itemID must be a positive integer"
 	end
 	local value = definition.getValue(itemID, auctionHouseType)

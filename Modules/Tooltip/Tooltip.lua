@@ -12,6 +12,7 @@ local floor = math.floor
 local format = string.format
 local FormatLargeNumber = FormatLargeNumber
 local GameTooltip = GameTooltip
+local GameTooltip_Hide = GameTooltip_Hide
 local GetMouseFoci = GetMouseFoci
 local IsAltKeyDown = IsAltKeyDown
 local IsControlKeyDown = IsControlKeyDown
@@ -174,6 +175,18 @@ local function HasRenderedYAAHAData(tooltip)
 	return false
 end
 
+local function PopupOnHyperlinkEnter(popup, link)
+	if popup.yaahaItemID then
+		module:ShowTooltip(popup, link, popup.yaahaItemID, popup.yaahaAuctionScope)
+	end
+end
+
+local function PopupOnHide(popup)
+	popup.yaahaItemID = nil
+	popup.yaahaAuctionScope = nil
+	GameTooltip_Hide()
+end
+
 local function IsSameDisplay(tooltip, kind, id)
 	local state = tooltipDisplayState[tooltip]
 	return state and state.kind == kind and state.id == id
@@ -249,14 +262,19 @@ local function AddCraftingLines(lineState, result, showBreakdown, multiplier)
 	if not result or not showBreakdown then
 		return
 	end
-	local quantityScale = multiplier / result.outputQuantity
+	local quantityScale = multiplier
+		/ (result.effectiveOutputQuantity or result.outputQuantity)
 	for index = 1, #result.materials do
 		local material = result.materials[index]
+		local resourcefulnessFactor = material.resourcefulnessEligible
+			and (1 - (result.expectedResourcefulnessRefund or 0)) or 1
 		local name, link = C_Item.GetItemInfo(material.itemID)
 		local label = format(L["%s x%s"], link or name or tostring(material.itemID),
-			FormatExpectedQuantity(material.quantity * quantityScale))
+			FormatExpectedQuantity(material.quantity * quantityScale
+				* resourcefulnessFactor))
 		local value = material.totalValue
-			and addon:FormatMoney(material.totalValue * quantityScale) or "--"
+			and addon:FormatMoney(material.totalValue * quantityScale
+				* resourcefulnessFactor) or "--"
 		AddTooltipLine(lineState, PROFESSIONS_CRAFTING, label, value)
 		-- Keep the recipe's actual reagent above; this is only the cheaper way
 		-- to obtain it and never changes the saved recipe requirements.
@@ -452,6 +470,19 @@ function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 	end
 end
 
+function module:AttachPopup(popup, itemID, scope)
+	popup.yaahaItemID = itemID
+	popup.yaahaAuctionScope = scope
+	if popup.yaahaTooltipHooked then
+		return
+	end
+	popup.yaahaTooltipHooked = true
+	popup:SetHyperlinksEnabled(true)
+	popup:HookScript("OnHyperlinkEnter", PopupOnHyperlinkEnter)
+	popup:HookScript("OnHyperlinkLeave", GameTooltip_Hide)
+	popup:HookScript("OnHide", PopupOnHide)
+end
+
 function module:AddRecipeData(tooltip, spellID, scope, reuseHeader, suppressRefresh)
 	local activeScope, scopeDB, scopeName = GetContext(scope)
 	if not professionScanner:IsRecipeKnown(spellID, false) then
@@ -537,7 +568,8 @@ end
 
 function module:ProcessSpellTooltip(tooltip, spellID)
 	if not spellID then
-		_, spellID = tooltip:GetSpell()
+		local _, tooltipSpellID = tooltip:GetSpell()
+		spellID = tooltipSpellID
 	end
 	local state = tooltipState[tooltip]
 	if not spellID or state and state.spellID == spellID and HasRenderedYAAHAData(tooltip) then

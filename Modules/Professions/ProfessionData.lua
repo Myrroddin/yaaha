@@ -30,6 +30,9 @@ local MATERIAL_MARKET_VALUE_FIELD = "currentMarketValue"
 local ITEM_BIND_ON_ACQUIRE = Enum.ItemBind.OnAcquire
 local ITEM_BIND_QUEST = Enum.ItemBind.Quest
 local COPPER_PER_GOLD = 10000
+local ENCHANTING_VELLUM_ITEM_ID = 38682
+local EMPTY_TABLE = {}
+local UNIVERSAL_VELLUM_ITEM_IDS = { ENCHANTING_VELLUM_ITEM_ID }
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local isClassicEra = addon.isClassicEra
@@ -54,8 +57,6 @@ local knownReagentRevision = -1
 local knownVendorReagentIndex
 local knownVendorReagentRevision = -1
 
-local ENCHANTING_VELLUM_ITEM_ID = 38682
-
 local function GetTimestamp()
 	return GetServerTime and GetServerTime() or time()
 end
@@ -68,8 +69,8 @@ local function RecipeHasReagent(recipe, itemID)
 	if recipe.reagents and recipe.reagents[itemID] then
 		return true
 	end
-	for _, slot in ipairs(recipe.reagentSlots or {}) do
-		for _, candidate in ipairs(slot.items or {}) do
+	for _, slot in ipairs(recipe.reagentSlots or EMPTY_TABLE) do
+		for _, candidate in ipairs(slot.items or EMPTY_TABLE) do
 			if candidate.itemID == itemID then
 				return true
 			end
@@ -79,16 +80,16 @@ local function RecipeHasReagent(recipe, itemID)
 end
 
 local function AddKnownReagents(index, professionStore)
-	for _, professions in pairs(professionStore or {}) do
-		for _, profession in pairs(professions or {}) do
-			for _, recipe in pairs(profession.recipes or {}) do
-				for itemID in pairs(recipe.reagents or {}) do
+	for _, professions in pairs(professionStore or EMPTY_TABLE) do
+		for _, profession in pairs(professions or EMPTY_TABLE) do
+			for _, recipe in pairs(profession.recipes or EMPTY_TABLE) do
+				for itemID in pairs(recipe.reagents or EMPTY_TABLE) do
 					if type(itemID) == "number" and itemID > 0 then
 						index[itemID] = true
 					end
 				end
-				for _, slot in ipairs(recipe.reagentSlots or {}) do
-					for _, candidate in ipairs(slot.items or {}) do
+				for _, slot in ipairs(recipe.reagentSlots or EMPTY_TABLE) do
+					for _, candidate in ipairs(slot.items or EMPTY_TABLE) do
 						if type(candidate.itemID) == "number" and candidate.itemID > 0 then
 							index[candidate.itemID] = true
 						end
@@ -116,7 +117,7 @@ local function GetKnownVendorReagentIndex()
 	knownVendorReagentIndex = {}
 	-- Vendor prices are global, so retain reagents known on every saved
 	-- faction-realm rather than pruning another faction's useful prices.
-	for _, scopeDB in pairs(addon.db.sv.factionrealm or {}) do
+	for _, scopeDB in pairs(addon.db.sv.factionrealm or EMPTY_TABLE) do
 		AddKnownReagents(knownVendorReagentIndex, scopeDB.knownProfessions)
 	end
 	-- The active AceDB scope may contain default-backed data which has not yet
@@ -208,6 +209,9 @@ function module:SaveProfession(professionKey, profession)
 			end
 		end
 	end
+	-- A successful scan is a complete snapshot of this profession branch. Replace
+	-- its recipe table wholesale so recipes lost to relearning or specialization
+	-- changes cannot survive by being merged with the new state.
 	professions[professionKey] = profession
 	self:InvalidateRecipes()
 	return true
@@ -221,6 +225,8 @@ function module:RemoveProfessions(predicate, context)
 	local professions = GetProfessionStore()[characterKey]
 	local changed = false
 	for professionKey, profession in pairs(professions) do
+		-- The caller identifies only primary professions absent from the current
+		-- character. Other learned professions and every other alt remain intact.
 		if predicate(professionKey, profession, context) then
 			professions[professionKey] = nil
 			changed = true
@@ -242,7 +248,7 @@ local function ResolveKnownCraftOutput(itemID, currentCharacterOnly)
 	for characterName, professions in pairs(GetProfessionStore()) do
 		if not currentCharacterOnly or characterName == characterKey then
 			for _, profession in pairs(professions) do
-				for _, recipe in pairs(profession.recipes or {}) do
+				for _, recipe in pairs(profession.recipes or EMPTY_TABLE) do
 					if not recipe.outputItemID and not recipe.outputItemIDs
 						and recipe.name == itemName then
 						recipe.outputItemID = itemID
@@ -300,7 +306,7 @@ local function BuildRecipeIndex(currentCharacterOnly, outputItemID)
 	for characterName, professions in pairs(GetProfessionStore()) do
 		if not currentCharacterOnly or characterName == characterKey then
 			for _, profession in pairs(professions) do
-				for recipeKey, recipe in pairs(profession.recipes or {}) do
+				for recipeKey, recipe in pairs(profession.recipes or EMPTY_TABLE) do
 					local spellID = recipe.spellID
 					if spellID == nil and type(recipeKey) == "number" then
 						spellID = recipeKey
@@ -316,7 +322,7 @@ local function BuildRecipeIndex(currentCharacterOnly, outputItemID)
 					}
 					AddSpellRecipe(recipesBySpell, spellID, entry)
 					AddOutputRecipe(recipesByOutput, recipe.outputItemID, entry)
-					for _, itemID in ipairs(recipe.outputItemIDs or {}) do
+					for _, itemID in ipairs(recipe.outputItemIDs or EMPTY_TABLE) do
 						if itemID ~= recipe.outputItemID then
 							AddOutputRecipe(recipesByOutput, itemID, entry)
 						end
@@ -374,10 +380,11 @@ local function Consider(best, value, source, detail)
 	return best
 end
 
-local function AddMaterial(materials, material, itemID, quantity)
+local function AddMaterial(materials, material, itemID, quantity, resourcefulnessEligible)
 	local entry = {
 		itemID = itemID,
 		quantity = quantity,
+		resourcefulnessEligible = resourcefulnessEligible == true,
 	}
 	local subtotal
 	if material then
@@ -420,13 +427,14 @@ function Calculator:GetRecipeCost(entry)
 	end
 	self.visitingRecipes[entry] = true
 	local total = 0
+	local resourcefulnessEligibleTotal = 0
 	local materials = {}
 	local complete = true
 
 	if entry.recipe.reagentSlots then
 		for _, slot in ipairs(entry.recipe.reagentSlots) do
 			local cheapest, cheapestItemID, cheapestQuantity, cheapestTotal
-			for _, candidate in ipairs(slot.items or {}) do
+			for _, candidate in ipairs(slot.items or EMPTY_TABLE) do
 				local material = self:GetItemCost(candidate.itemID)
 				local quantity = candidate.quantity or slot.quantity or 1
 				local candidateTotal = material and quantity and material.value * quantity
@@ -438,22 +446,29 @@ function Calculator:GetRecipeCost(entry)
 				end
 			end
 			if cheapest then
-				total = total + AddMaterial(materials, cheapest, cheapestItemID, cheapestQuantity)
+				local subtotal = AddMaterial(materials, cheapest, cheapestItemID,
+					cheapestQuantity, slot.resourcefulnessEligible)
+				total = total + subtotal
+				if slot.resourcefulnessEligible then
+					resourcefulnessEligibleTotal = resourcefulnessEligibleTotal + subtotal
+				end
 			else
 				local candidate = slot.items and slot.items[1]
 				if candidate then
 					AddMaterial(materials, nil, candidate.itemID,
-						candidate.quantity or slot.quantity or 1)
+						candidate.quantity or slot.quantity or 1,
+						slot.resourcefulnessEligible)
 				end
 				complete = false
 			end
 		end
 	else
-		for itemID, quantity in pairs(entry.recipe.reagents or {}) do
+		for itemID, quantity in pairs(entry.recipe.reagents or EMPTY_TABLE) do
 			local material = self:GetItemCost(itemID)
-			local subtotal = AddMaterial(materials, material, itemID, quantity)
+			local subtotal = AddMaterial(materials, material, itemID, quantity, true)
 			if subtotal then
 				total = total + subtotal
+				resourcefulnessEligibleTotal = resourcefulnessEligibleTotal + subtotal
 			else
 				complete = false
 			end
@@ -466,7 +481,7 @@ function Calculator:GetRecipeCost(entry)
 	end
 	if not vellumItemIDs and usesUniversalVellum
 		and entry.recipe.isEnchant then
-		vellumItemIDs = {ENCHANTING_VELLUM_ITEM_ID}
+		vellumItemIDs = UNIVERSAL_VELLUM_ITEM_IDS
 	end
 	if vellumItemIDs then
 		for _, itemID in ipairs(vellumItemIDs) do
@@ -486,7 +501,9 @@ function Calculator:GetRecipeCost(entry)
 			end
 		end
 		if cheapest then
-			total = total + AddMaterial(materials, cheapest, cheapestItemID, 1)
+			local subtotal = AddMaterial(materials, cheapest, cheapestItemID, 1, true)
+			total = total + subtotal
+			resourcefulnessEligibleTotal = resourcefulnessEligibleTotal + subtotal
 		else
 			AddMaterial(materials, nil, vellumItemIDs[1], 1)
 			complete = false
@@ -498,12 +515,29 @@ function Calculator:GetRecipeCost(entry)
 	local minMade = entry.recipe.minMade or 1
 	local maxMade = entry.recipe.maxMade or minMade
 	local outputQuantity = (minMade + maxMade) / 2
+	local resourcefulnessChance = entry.recipe.resourcefulnessChance or 0
+	local multicraftChance = entry.recipe.multicraftChance or 0
+	local expectedResourcefulnessRefund = entry.recipe.expectedResourcefulnessRefund or 0
+	local expectedMulticraftYield = entry.recipe.expectedMulticraftYield or 0
+	local resourcefulnessSavings = resourcefulnessEligibleTotal
+		* expectedResourcefulnessRefund
+	local expectedReagentValue = total - resourcefulnessSavings
+	local effectiveOutputQuantity = outputQuantity * (1 + expectedMulticraftYield)
 	local result = {
-		-- Expected extra output affects finished-item return, never reagent
-		-- requirements or baseline crafting cost.
-		value = complete and addon:RoundMoney(total / outputQuantity) or nil,
+		-- Retail proc stats change the expected per-unit cost: Resourcefulness
+		-- lowers average reagent consumption and Multicraft increases average
+		-- output. The raw recipe requirements remain available below.
+		value = complete and addon:RoundMoney(expectedReagentValue
+			/ effectiveOutputQuantity) or nil,
 		totalReagentValue = complete and total or nil,
+		expectedReagentValue = complete and addon:RoundMoney(expectedReagentValue) or nil,
+		resourcefulnessSavings = complete and addon:RoundMoney(resourcefulnessSavings) or nil,
 		outputQuantity = outputQuantity,
+		effectiveOutputQuantity = effectiveOutputQuantity,
+		resourcefulnessChance = resourcefulnessChance,
+		multicraftChance = multicraftChance,
+		expectedResourcefulnessRefund = expectedResourcefulnessRefund,
+		expectedMulticraftYield = expectedMulticraftYield,
 		character = entry.character,
 		profession = entry.profession,
 		skillLineID = entry.skillLineID,
@@ -578,7 +612,7 @@ function Calculator:GetItemCost(itemID)
 			end
 		end
 
-		local outputRecipes = self.recipesByOutput[itemID] or {}
+		local outputRecipes = self.recipesByOutput[itemID] or EMPTY_TABLE
 		local hasFreshRecipe = HasFreshRecipe(outputRecipes)
 		for index = 1, #outputRecipes do
 			local entry = outputRecipes[index]
@@ -601,7 +635,7 @@ function Calculator:GetItemCost(itemID)
 end
 
 function Calculator:GetRecipe(spellID)
-	local entries = self.recipesBySpell[spellID] or {}
+	local entries = self.recipesBySpell[spellID] or EMPTY_TABLE
 	local hasFreshRecipe = HasFreshRecipe(entries)
 	local best
 	for index = 1, #entries do
@@ -618,7 +652,7 @@ end
 
 function Calculator:GetRecipesForItem(itemID)
 	local results = {}
-	local outputRecipes = self.recipesByOutput[itemID] or {}
+	local outputRecipes = self.recipesByOutput[itemID] or EMPTY_TABLE
 	local hasFreshRecipe = HasFreshRecipe(outputRecipes)
 	for index = 1, #outputRecipes do
 		local entry = outputRecipes[index]
@@ -646,10 +680,6 @@ local function Calculate(auctionDB, currentCharacterOnly, outputItemID, allowAlc
 	}, Calculator)
 end
 
-function module:GetCharacterName()
-	return addon:GetCharacterKey()
-end
-
 function module:IsItemKnown(itemID, currentCharacterOnly)
 	local _, recipesByOutput = BuildRecipeIndex(currentCharacterOnly, itemID)
 	return recipesByOutput[itemID] ~= nil
@@ -669,7 +699,7 @@ function module:GetKnownRecipeSpellID(name)
 		return
 	end
 	for _, profession in pairs(GetProfessionStore()[characterKey]) do
-		for recipeKey, recipe in pairs(profession.recipes or {}) do
+		for recipeKey, recipe in pairs(profession.recipes or EMPTY_TABLE) do
 			if recipe.name == name then
 				return recipe.spellID or type(recipeKey) == "number" and recipeKey or nil
 			end

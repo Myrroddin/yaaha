@@ -43,5 +43,11 @@ function module:GetValue(itemInfo, scope, priceDB)
 end
 
 function module:IsBreakable(itemInfo)
-	return self:GetResults(itemInfo) ~= nil
+	for index = 1, #sources do
+		local source = sources[index]
+		if source.dataModule and source.dataModule:IsBreakable(itemInfo) then
+			return true
+		end
+	end
+	return false
 end

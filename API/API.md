@@ -406,15 +406,24 @@ local value = YAAHA_API.GetRecipeCraftingValue(
 
 Both functions return `nil` when the recipe is unknown or any required material lacks a valid acquisition value. A tradeable reagent absent from the current market remains unavailable unless YAAHA knows another real vendor, conversion, crafting, or authoritative derived-value path. Only soulbound or quest-bound materials may receive a final estimated fallback.
 
+On Retail, YAAHA records the current character's recipe-specific Resourcefulness and Multicraft chances when the profession is scanned. Profession equipment and specialization changes made while that profession is open trigger another scan. Other characters retain their last recorded profession snapshot until their profession is opened again. A recipe unsupported by either stat retains a zero chance and receives no adjustment.
+
 ### Crafting results
 
 A full result is a `YAAHA_API.CraftingResult` snapshot:
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `value` | `integer` | Per-unit crafting value in copper. |
-| `totalReagentValue` | `integer` | Reagent value for one recipe cast in copper. |
-| `outputQuantity` | `number` | Fixed output, or the average of the minimum and maximum output. |
+| `value` | `integer` | Expected per-unit crafting value in copper after Resourcefulness and Multicraft. |
+| `totalReagentValue` | `integer` | Raw reagent value for one recipe cast in copper, before Resourcefulness. |
+| `expectedReagentValue` | `integer` | Expected reagent value for one cast after Resourcefulness. |
+| `resourcefulnessSavings` | `integer` | Expected Resourcefulness savings for one cast in copper. |
+| `outputQuantity` | `number` | Base fixed output, or the average of the minimum and maximum output. |
+| `effectiveOutputQuantity` | `number` | Expected average output for one cast after Multicraft. |
+| `resourcefulnessChance` | `number` | Recipe-specific Resourcefulness proc chance from `0` to `1`. |
+| `multicraftChance` | `number` | Recipe-specific Multicraft proc chance from `0` to `1`. |
+| `expectedResourcefulnessRefund` | `number` | Expected fraction of eligible reagent value saved per cast, including recipe-specific specialization bonuses. |
+| `expectedMulticraftYield` | `number` | Expected extra output as a fraction of base output, including recipe-specific specialization bonuses. |
 | `expectedOutputMultiplier` | `number` | Expected finished-item auction-return multiplier from an applicable Alchemy specialization. Current values are `1`, `1.2`, or `1.4`. It never reduces material or crafting costs. |
 | `character` | `string` | Character whose known recipe supplied the result: `name-realm` normally or `firstName surname` on Forever. |
 | `profession` | `string` | Localized profession name. |
@@ -435,6 +444,7 @@ Each crafting material contains:
 | `unitValue` | `integer` | Selected per-unit value in copper. |
 | `totalValue` | `integer` | Value of the required quantity in copper. |
 | `source` | `string` | Acquisition source which supplied `unitValue`. |
+| `resourcefulnessEligible` | `boolean` | Whether this required reagent contributes to expected Resourcefulness savings. |
 | `conversion` | `CraftingConversion?` | Single-source conversion details when `source` is `"convert"`; absent for averaged conversion families. |
 | `crafting` | `CraftingResult?` | Nested recipe details when `source` is `"crafting"`. |
 

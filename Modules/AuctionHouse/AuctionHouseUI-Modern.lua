@@ -131,17 +131,18 @@ end
 
 local function CreatePage(definition, index, previousButton)
 	local button = CreateFrame("Button", "YAAHAAuctionHouseFrameTab" .. index, workspace,
-		"PanelTabButtonTemplate")
+		"AuctionHouseFrameTopTabTemplate")
 	button:SetID(index)
 	button:SetText(definition.label)
-	PanelTemplates_TabResize(button, 0)
 	if previousButton then
 		button:SetPoint("TOPLEFT", previousButton, "TOPRIGHT", -14, 0)
 	else
 		button:SetPoint("TOPLEFT", workspace, "TOPLEFT", 14, -68)
 	end
 	pageKeysByButton[button] = definition.key
-	button:SetScript("OnClick", PageOnClick)
+	-- Preserve the native auction tab's click behavior, including its sound, then
+	-- switch YAAHA's visible child page.
+	button:HookScript("OnClick", PageOnClick)
 	pageIndices[definition.key] = index
 
 	local page = CreateFrame("Frame", nil, workspace)

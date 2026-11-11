@@ -11,8 +11,18 @@ local function OnTooltipSetItem(tooltip, data)
 	if tooltip.IsForbidden and tooltip:IsForbidden() then
 		return
 	end
-	local _, link = tooltip:GetItem()
-	local itemID = data and data.id or addon:GetItemID(link)
+	local itemID = data and data.id
+	if not addon:IsValueAccessible(itemID) then
+		return
+	end
+	local link
+	-- TooltipDataProcessor supplies the item directly, including for comparison
+	-- tooltips which do not inherit the GameTooltip GetItem method.
+	if not itemID and tooltip.GetItem then
+		local _, tooltipLink = tooltip:GetItem()
+		link = tooltipLink
+		itemID = addon:GetItemID(link)
+	end
 	-- Modern bag and inventory tooltips are populated through C_TooltipInfo, so
 	-- Classic's OnTooltipSetItem script and SetHyperlink hook do not fire.
 	module:ProcessItemTooltip(tooltip, itemID, link, true)

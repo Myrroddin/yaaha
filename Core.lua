@@ -12,8 +12,10 @@ local FACTION_ALLIANCE = FACTION_ALLIANCE
 local FACTION_HORDE = FACTION_HORDE
 local format = string.format
 local FormatLargeNumber = FormatLargeNumber
+local GetGuildInfo = GetGuildInfo
 local GetNormalizedRealmName = GetNormalizedRealmName
 local GetServerTime = GetServerTime
+local GetUnitName = GetUnitName
 local GOLD_AMOUNT_SYMBOL = GOLD_AMOUNT_SYMBOL
 local GOLD_AMOUNT_TEXTURE = GOLD_AMOUNT_TEXTURE
 local LE_GAME_ERR_AUCTION_BID_OWN = LE_GAME_ERR_AUCTION_BID_OWN
@@ -23,7 +25,9 @@ local LE_GAME_ERR_ITEM_MAX_COUNT = LE_GAME_ERR_ITEM_MAX_COUNT
 local LE_GAME_ERR_ITEM_NOT_FOUND = LE_GAME_ERR_ITEM_NOT_FOUND
 local LE_GAME_ERR_NOT_ENOUGH_MONEY = LE_GAME_ERR_NOT_ENOUGH_MONEY
 local LibStub = LibStub
+local IsInGuild = IsInGuild
 local IsPlayerNeutral = IsPlayerNeutral
+local issecretvalue = issecretvalue
 local NameUtil = NameUtil
 local pcall = pcall
 local random = math.random
@@ -40,6 +44,7 @@ local tonumber = tonumber
 local type = type
 local UnitFactionGroup = UnitFactionGroup
 local UnitFullName = UnitFullName
+local UnitGUID = UnitGUID
 local WOW_PROJECT_BURNING_CRUSADE_CLASSIC = WOW_PROJECT_BURNING_CRUSADE_CLASSIC
 local WOW_PROJECT_CAMELOT = WOW_PROJECT_CAMELOT
 local WOW_PROJECT_CLASSIC = WOW_PROJECT_CLASSIC
@@ -54,12 +59,16 @@ local WOW_PROJECT_WRATH_CLASSIC = WOW_PROJECT_WRATH_CLASSIC
 ---@field FireAPIEvent fun(self: YAAHA, event: string, ...)
 ---@field GetOptions fun(self: YAAHA): table
 ---@field GetSyncSourceID fun(self: YAAHA): string
+---@field guildName? string
+---@field isInGuild boolean
 ---@field localizedPlayerFaction string
 ---@field oppositeFaction? "Alliance"|"Horde"
 ---@field oppositeFactionName? string
 ---@field playerFaction "Alliance"|"Horde"|"Neutral"
 local addon = LibStub("AceAddon-3.0"):NewAddon("YAAHA", "AceComm-3.0", "AceConsole-3.0", "AceEvent-3.0", "AceSerializer-3.0", "LibAboutPanel-2.0")
 
+-- The client cannot change during a UI session, so every module can safely cache
+-- these flags. Player faction is deliberately separate and refreshable below.
 addon.isClassicEra = WOW_PROJECT_ID == WOW_PROJECT_CLASSIC
 addon.isTBC = WOW_PROJECT_ID == WOW_PROJECT_BURNING_CRUSADE_CLASSIC
 addon.isWrath = WOW_PROJECT_ID == WOW_PROJECT_WRATH_CLASSIC
@@ -94,6 +103,19 @@ function addon:RefreshPlayerFaction()
 end
 
 addon:RefreshPlayerFaction()
+
+function addon:RefreshPlayerGuild()
+	local previousGuildName = self.guildName
+	local wasInGuild = self.isInGuild
+	self.isInGuild = IsInGuild()
+	self.guildName = self.isInGuild and GetGuildInfo("player") or nil
+	if self.db and (wasInGuild ~= self.isInGuild
+		or previousGuildName ~= self.guildName) then
+		self:SendMessage("YAAHA_GUILD_CHANGED", previousGuildName, self.guildName)
+	end
+end
+
+addon:RefreshPlayerGuild()
 
 local usesSharedAuctionHouse = addon.usesSharedAuctionHouse
 
@@ -207,24 +229,37 @@ local defaults = {
 	},
 }
 
-local playerName, playerSecondName, playerFullName
+local playerName, playerSecondName, playerFullName, playerGUID
 local connectedRealmKey
+local connectedRealmSet
+local vendorFlipTracking
 
 local function NormalizeRealmGroupName(realm)
 	return type(realm) == "string" and realm ~= ""
 		and stringLower(stringGsub(realm, "[%s%-%.]", "")) or nil
 end
 
-local function AddRealmToGroup(realms, realmSet, realm)
+local function AddRealmToSet(realmSet, realm)
 	realm = NormalizeRealmGroupName(realm)
 	if realm and not realmSet[realm] then
 		realmSet[realm] = true
-		realms[#realms + 1] = realm
 	end
 end
 
+local function BrokerOnClick()
+	addon:OpenConfig()
+end
+
+local function BrokerOnTooltipShow(tooltip)
+	tooltip:AddLine("YAAHA")
+	tooltip:AddLine(format(L["Vendor flip profit: %s"],
+		vendorFlipTracking:GetFormattedProfit()))
+	tooltip:AddLine(L["Click for configuration."])
+	tooltip:Show()
+end
+
 local function InitializeBroker()
-	local vendorFlipTracking = addon:GetModule("VendorFlipTracking")
+	vendorFlipTracking = addon:GetModule("VendorFlipTracking")
 	---@diagnostic disable-next-line: inject-field
 	addon.brokerObject = LibDataBroker:NewDataObject("YAAHA", {
 		type = "data source",
@@ -232,16 +267,8 @@ local function InitializeBroker()
 		label = "YAAHA",
 		icon = BROKER_ICON,
 		text = vendorFlipTracking:GetFormattedProfit(),
-		OnClick = function()
-			addon:OpenConfig()
-		end,
-		OnTooltipShow = function(tooltip)
-			tooltip:AddLine("YAAHA")
-			tooltip:AddLine(format(L["Vendor flip profit: %s"],
-				vendorFlipTracking:GetFormattedProfit()))
-			tooltip:AddLine(L["Click for configuration."])
-			tooltip:Show()
-		end,
+		OnClick = BrokerOnClick,
+		OnTooltipShow = BrokerOnTooltipShow,
 	})
 	-- YAAHA keeps lockOnDegree beside LibDBIcon's keys. The library accepts extra
 	-- addon-owned fields, although WoWLua-LS's narrow DB definition does not.
@@ -267,6 +294,10 @@ function addon:OnInitialize()
 	AceConfigDialog:AddToBlizOptions("YAAHA")
 
 	self:RegisterChatCommand("yaaha", "OpenConfig")
+	-- Guild membership and guild names can change without a reload. Core owns the
+	-- mutable state so synchronization never relies on a stale per-module cache.
+	self:RegisterEvent("GUILD_ROSTER_UPDATE", "RefreshPlayerGuild")
+	self:RegisterEvent("PLAYER_GUILD_UPDATE", "RefreshPlayerGuild")
 	InitializeBroker()
 
 	-- A neutral Pandaren remains in the same UI session after choosing a faction.
@@ -358,8 +389,15 @@ function addon:GetCurrentMarketValue(data)
 end
 
 function addon:GetItemID(link)
+	if issecretvalue(link) then
+		return
+	end
 	local itemID = link and stringMatch(link, "item:(%d+)")
 	return itemID and tonumber(itemID)
+end
+
+function addon:IsValueAccessible(value)
+	return not issecretvalue(value)
 end
 
 function addon:GetCharacterKey()
@@ -371,15 +409,10 @@ function addon:GetConnectedRealmKey()
 	if connectedRealmKey then
 		return connectedRealmKey
 	end
-	local realmSet = {}
+	local realmSet = self:GetConnectedRealmSet()
 	local realms = {}
-
-	AddRealmToGroup(realms, realmSet, GetNormalizedRealmName())
-	local succeeded, connectedRealms = pcall(C_AutoComplete.GetAutoCompleteRealms)
-	if succeeded and type(connectedRealms) == "table" then
-		for index = 1, #connectedRealms do
-			AddRealmToGroup(realms, realmSet, connectedRealms[index])
-		end
+	for realm in pairs(realmSet) do
+		realms[#realms + 1] = realm
 	end
 	if #realms == 0 then
 		return
@@ -389,6 +422,32 @@ function addon:GetConnectedRealmKey()
 	sort(realms)
 	connectedRealmKey = tableConcat(realms, "\031")
 	return connectedRealmKey
+end
+
+function addon:GetConnectedRealmSet()
+	if connectedRealmSet then
+		return connectedRealmSet
+	end
+
+	local realmSet = {}
+	AddRealmToSet(realmSet, GetNormalizedRealmName())
+	local getAutoCompleteRealms = C_AutoComplete and C_AutoComplete.GetAutoCompleteRealms
+	local succeeded, connectedRealms
+	if getAutoCompleteRealms then
+		succeeded, connectedRealms = pcall(getAutoCompleteRealms)
+	end
+	if succeeded and type(connectedRealms) == "table" then
+		for index = 1, #connectedRealms do
+			AddRealmToSet(realmSet, connectedRealms[index])
+		end
+	end
+	connectedRealmSet = realmSet
+	return connectedRealmSet
+end
+
+function addon:IsConnectedRealm(realm)
+	realm = NormalizeRealmGroupName(realm)
+	return realm and self:GetConnectedRealmSet()[realm] == true or false
 end
 
 function addon:GetSyncSourceID()
@@ -458,6 +517,11 @@ function addon:NEUTRAL_FACTION_SELECT_RESULT(event, success)
 end
 
 function addon:NormalizeCharacterName(name, secondName)
+	-- Unit identity APIs may return secret values while Blizzard restricts an
+	-- identity. Reject them before comparison, pattern matching, or table access.
+	if issecretvalue(name) or issecretvalue(secondName) then
+		return
+	end
 	if not name or name == "" then
 		return
 	end
@@ -488,12 +552,33 @@ end
 function addon:GetPlayerIdentity()
 	if not playerFullName then
 		playerName, playerSecondName = UnitFullName("player")
+		if issecretvalue(playerName) or issecretvalue(playerSecondName) then
+			playerName, playerSecondName = nil, nil
+			return
+		end
 		if not isForever then
 			playerSecondName = playerSecondName or GetNormalizedRealmName()
 		end
 		playerFullName = self:NormalizeCharacterName(playerName, playerSecondName)
 	end
 	return playerName, playerSecondName, playerFullName
+end
+
+function addon:GetUnitCharacterName(unit)
+	local name = GetUnitName(unit, true)
+	return self:NormalizeCharacterName(name)
+end
+
+function addon:GetUnitGUID(unit)
+	local guid = UnitGUID(unit)
+	return not issecretvalue(guid) and guid or nil
+end
+
+function addon:GetPlayerGUID()
+	if not playerGUID then
+		playerGUID = self:GetUnitGUID("player")
+	end
+	return playerGUID
 end
 
 function addon:IsVendorDealProfitable(cost, value)
@@ -532,6 +617,22 @@ function addon:IsAuctionActionError(errorType)
 		or errorType == LE_GAME_ERR_ITEM_MAX_COUNT
 		or errorType == LE_GAME_ERR_ITEM_NOT_FOUND
 		or errorType == LE_GAME_ERR_NOT_ENOUGH_MONEY
+end
+
+function addon.itemKeysEqual(left, right)
+	return left and right
+		and left.itemID == right.itemID
+		and left.itemLevel == right.itemLevel
+		and left.itemSuffix == right.itemSuffix
+		and left.battlePetSpeciesID == right.battlePetSpeciesID
+end
+
+function addon.sortByProfit(left, right)
+	return left.profit > right.profit
+end
+
+function addon.sortByBestProfit(left, right)
+	return left.bestProfit > right.bestProfit
 end
 
 -- Realm-based short names resolve to the current realm. Forever first names are

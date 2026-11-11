@@ -1,6 +1,5 @@
 -- Owns, restores, compresses, and saves YAAHA's canonical auction databases.
 
-local C_AutoComplete = C_AutoComplete
 local C_EncodingUtil = C_EncodingUtil
 local FACTION_NEUTRAL = FACTION_NEUTRAL
 local format = string.format
@@ -11,7 +10,6 @@ local pairs = pairs
 local pcall = pcall
 local rawset = rawset
 local sort = table.sort
-local stringGsub = string.gsub
 local stringSub = string.sub
 local type = type
 
@@ -108,10 +106,6 @@ local function DecodeStoredAuctionDB(stored)
 	return auctionDB, auctionDB and stored.backupPayload or nil
 end
 
-local function NormalizeRealmName(realm)
-	return realm and stringGsub(realm, "[%s%-%.]", "") or nil
-end
-
 local function LoadOppositeFactionData()
 	oppositeFactionLoaded = true
 	oppositeFactionData = nil
@@ -121,23 +115,12 @@ local function LoadOppositeFactionData()
 
 	-- AceDB exposes only the active faction-realm directly. Read AuctionDB's raw
 	-- scopes to find the freshest opposite-faction database in the realm group.
-	local connectedRealms = {}
-	local currentRealm = GetNormalizedRealmName()
-	if currentRealm then
-		connectedRealms[currentRealm] = true
-	end
-	local realms = C_AutoComplete.GetAutoCompleteRealms()
-	for index = 1, realms and #realms or 0 do
-		local realm = realms[index]
-		connectedRealms[realm] = true
-	end
-
 	local prefix = addon.oppositeFaction .. " - "
 	local candidates = {}
 	for key, scopeDB in pairs(module.db.sv.factionrealm or {}) do
 		if stringSub(key, 1, #prefix) == prefix then
-			local realm = NormalizeRealmName(stringSub(key, #prefix + 1))
-			if realm and connectedRealms[realm] then
+			local realm = stringSub(key, #prefix + 1)
+			if addon:IsConnectedRealm(realm) then
 				candidates[#candidates + 1] = {
 					db = scopeDB,
 					key = key,

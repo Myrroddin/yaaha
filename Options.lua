@@ -136,7 +136,10 @@ function addon:GetOptions()
 							return addon.db.profile.syncData
 						end,
 						set = function(_, value)
-							addon.db.profile.syncData = value
+							if addon.db.profile.syncData ~= value then
+								addon.db.profile.syncData = value
+								addon:SendMessage("YAAHA_SYNC_SETTING_CHANGED", value)
+							end
 						end
 					},
 					formatLargeNumbers = {

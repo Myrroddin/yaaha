@@ -1,7 +1,10 @@
 -- Maps Mists and Standard milling sources to expected material yields.
 -- The Mists baseline contains Vanilla through Mists as represented by TSM's
 -- Mists data. Standard replaces it with current data through Shadowlands;
--- Dragonflight and later require profession-specialization modeling.
+-- Dragonflight and later require profession-specialization modeling. Their
+-- Inscription traits can change output quality or yield for the current
+-- character, so they cannot be represented by one universal static result.
+-- https://www.wowhead.com/profession-traits/inscription
 
 local LibStub = LibStub
 

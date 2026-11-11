@@ -8,7 +8,6 @@ local CreateFrame = CreateFrame
 local ERR_AUCTION_BID_PLACED = ERR_AUCTION_BID_PLACED
 local ERR_NOT_ENOUGH_MONEY = ERR_NOT_ENOUGH_MONEY
 local format = string.format
-local GameTooltip_Hide = GameTooltip_Hide
 local GetAuctionItemInfo = GetAuctionItemInfo
 local GetAuctionItemLink = GetAuctionItemLink
 local GetMoney = GetMoney
@@ -97,9 +96,7 @@ local statusElapsed = 0
 local wasScannerBusy
 local updateFrame = CreateFrame("Frame")
 
-local function SortByProfit(left, right)
-	return left.profit > right.profit
-end
+local SortByProfit = addon.sortByProfit
 
 local function IsDeal(configuration, cost, value)
 	return addon:IsBreakdownDeal(cost, value,
@@ -364,21 +361,7 @@ local function ShowCandidate(listing)
 		currentCandidate = nil
 		return false
 	end
-	popup.yaahaItemID = listing.itemID
-	if not popup.yaahaTooltipHooked then
-		popup.yaahaTooltipHooked = true
-		popup:SetHyperlinksEnabled(true)
-		popup:HookScript("OnHyperlinkEnter", function(self, link)
-			if self.yaahaItemID then
-				tooltip:ShowTooltip(self, link, self.yaahaItemID, scanner:GetAuctionScope())
-			end
-		end)
-		popup:HookScript("OnHyperlinkLeave", GameTooltip_Hide)
-		popup:HookScript("OnHide", function(self)
-			self.yaahaItemID = nil
-			GameTooltip_Hide()
-		end)
-	end
+	tooltip:AttachPopup(popup, listing.itemID, scanner:GetAuctionScope())
 	return true
 end
 
@@ -753,6 +736,7 @@ local function OnUpdate(_, elapsed)
 end
 
 function module:OnInitialize()
+	-- Tooltip.lua loads later in the TOC; resolve it after all modules exist.
 	tooltip = addon:GetModule("Tooltip")
 end
 

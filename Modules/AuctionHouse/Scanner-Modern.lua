@@ -15,7 +15,6 @@ local pairs = pairs
 local strsplit = strsplit
 local tonumber = tonumber
 local UnitFactionGroup = UnitFactionGroup
-local UnitGUID = UnitGUID
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local isForever = addon.isForever
@@ -89,7 +88,7 @@ local processingFrame = CreateFrame("Frame")
 processingFrame:Hide()
 
 local function GetNPCID()
-	local guid = UnitGUID("npc")
+	local guid = addon:GetUnitGUID("npc")
 	if not guid then
 		return
 	end
@@ -507,6 +506,14 @@ UpdateScanButton = function()
 	auctionHouseUI:SetScanStatus(canScan and L["Ready to scan."] or L["Scan unavailable."])
 end
 
+local function ScanButtonOnUpdate(self, elapsed)
+	self.updateElapsed = (self.updateElapsed or 0) + elapsed
+	if self.updateElapsed >= 0.5 then
+		self.updateElapsed = 0
+		UpdateScanButton()
+	end
+end
+
 local function CreateScanButton()
 	local parent = auctionHouseUI:GetScanButtonParent()
 	if not parent then
@@ -519,13 +526,7 @@ local function CreateScanButton()
 		scanButton:SetPoint("TOPLEFT", parent, "TOPLEFT", 14, -10)
 		scanButton:SetText(L["Scan"])
 		scanButton:SetScript("OnClick", StartScan)
-		scanButton:SetScript("OnUpdate", function(self, elapsed)
-			self.updateElapsed = (self.updateElapsed or 0) + elapsed
-			if self.updateElapsed >= 0.5 then
-				self.updateElapsed = 0
-				UpdateScanButton()
-			end
-		end)
+		scanButton:SetScript("OnUpdate", ScanButtonOnUpdate)
 	end
 
 	scanButton:SetParent(parent)

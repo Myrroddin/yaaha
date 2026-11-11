@@ -12,7 +12,6 @@ local ERR_AUCTION_BID_PLACED = ERR_AUCTION_BID_PLACED
 local ERR_NOT_ENOUGH_MONEY = ERR_NOT_ENOUGH_MONEY
 local floor = math.floor
 local format = string.format
-local GameTooltip_Hide = GameTooltip_Hide
 local GetMoney = GetMoney
 local GetTime = GetTime
 local ipairs = ipairs
@@ -34,7 +33,7 @@ local auctionHouseUI = addon:GetModule("AuctionHouseUI")
 local dataProcessing = addon:GetModule("DataProcessing")
 local scanner = addon:GetModule("Scanner")
 local saleCollector = addon:GetModule("SaleCollector")
-local tooltip = addon:GetModule("Tooltip")
+local tooltip
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
 local ITEM_POPUP_NAME = "YAAHA_VENDOR_FLIP_MODERN_ITEM"
@@ -68,9 +67,7 @@ local wasScannerBusy
 local updateFrame = CreateFrame("Frame")
 local AdvanceRequest, ContinueAfterCandidate, ContinueResultsLoading, ScheduleSearch
 
-local function SortByBestProfit(left, right)
-	return left.bestProfit > right.bestProfit
-end
+local SortByBestProfit = addon.sortByBestProfit
 
 local function SetStatus(text)
 	if statusText then
@@ -86,13 +83,7 @@ local function FormatLoss(loss)
 	return addon:FormatMoney(-loss, true, RED_NUMBER)
 end
 
-local function ItemKeysEqual(left, right)
-	return left and right
-		and left.itemID == right.itemID
-		and left.itemLevel == right.itemLevel
-		and left.itemSuffix == right.itemSuffix
-		and left.battlePetSpeciesID == right.battlePetSpeciesID
-end
+local ItemKeysEqual = addon.itemKeysEqual
 
 local function GetVendorCacheCounts()
 	local scope = scanner:GetAuctionScope()
@@ -380,29 +371,6 @@ local function RevalidateItemCandidate(candidate, action)
 	end
 end
 
-local function OnPopupHyperlinkEnter(popup, link)
-	if popup.yaahaItemID then
-		module:ShowItemTooltip(popup, link, popup.yaahaItemID)
-	end
-end
-
-local function OnPopupHide(popup)
-	popup.yaahaItemID = nil
-	GameTooltip_Hide()
-end
-
-local function AttachPopupTooltip(popup, itemID)
-	popup.yaahaItemID = itemID
-	if popup.yaahaTooltipHooked then
-		return
-	end
-	popup.yaahaTooltipHooked = true
-	popup:SetHyperlinksEnabled(true)
-	popup:HookScript("OnHyperlinkEnter", OnPopupHyperlinkEnter)
-	popup:HookScript("OnHyperlinkLeave", GameTooltip_Hide)
-	popup:HookScript("OnHide", OnPopupHide)
-end
-
 local function ShowItemCandidate(result)
 	if IsOwnItemResult(result) then
 		return false
@@ -450,7 +418,7 @@ local function ShowItemCandidate(result)
 		currentCandidate = nil
 		return false
 	end
-	AttachPopupTooltip(popup, candidate.itemID)
+	tooltip:AttachPopup(popup, candidate.itemID, scanner:GetAuctionScope())
 	return true
 end
 
@@ -475,10 +443,6 @@ local function ShowCommodityCandidate()
 		return false
 	end
 	return true
-end
-
-function module:ShowItemTooltip(owner, link, itemID)
-	tooltip:ShowTooltip(owner, link, itemID, scanner:GetAuctionScope())
 end
 
 function module:ProcessCurrentResults()
@@ -888,6 +852,11 @@ StaticPopupDialogs[COMMODITY_QUOTE_POPUP_NAME] = {
 	whileDead = false,
 	hideOnEscape = false,
 }
+
+function module:OnInitialize()
+	-- Tooltip.lua loads later in the TOC; resolve it after all modules exist.
+	tooltip = addon:GetModule("Tooltip")
+end
 
 local function OnUpdate(_, elapsed)
 	statusElapsed = statusElapsed + elapsed

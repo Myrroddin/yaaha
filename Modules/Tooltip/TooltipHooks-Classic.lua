@@ -10,6 +10,9 @@ local module = addon:GetModule("Tooltip")
 local professionScanner = addon:GetModule("ProfessionScanner")
 
 local function OnTooltipSetItem(tooltip)
+	if not tooltip.GetItem then
+		return
+	end
 	local _, link = tooltip:GetItem()
 	module:ProcessItemTooltip(tooltip, addon:GetItemID(link), link)
 end

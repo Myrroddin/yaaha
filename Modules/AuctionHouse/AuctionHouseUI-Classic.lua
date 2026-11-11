@@ -24,6 +24,7 @@ local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
 local auctionFrame, workspace, yaahaTab
 local pageIndices = {}
+local pageKeysByButton = {}
 local pages = {}
 local selectedPage = "post"
 local scopeText, statusText
@@ -52,6 +53,7 @@ local blizzardTabs = {
 	bids = 2,
 	auctions = 3,
 }
+local blizzardPageNames = { "AuctionFrameBrowse", "AuctionFrameBid", "AuctionFrameAuctions" }
 
 local yaahaPages = {
 	yaahaSearch = "search",
@@ -63,11 +65,21 @@ local yaahaPages = {
 local function HideBlizzardPages()
 	-- Blizzard's tab handler normally performs this work. YAAHA uses its own click
 	-- handler, so the three original page frames must be hidden explicitly.
-	for _, frameName in ipairs({ "AuctionFrameBrowse", "AuctionFrameBid", "AuctionFrameAuctions" }) do
+	for _, frameName in ipairs(blizzardPageNames) do
 		local frame = _G[frameName]
 		if frame then
 			frame:Hide()
 		end
+	end
+end
+
+local function OpenOptions()
+	addon:OpenConfig()
+end
+
+local function AuctionFrameTabOnClick(tab)
+	if tab ~= yaahaTab then
+		workspace:Hide()
 	end
 end
 
@@ -82,6 +94,11 @@ local function SelectPage(pageKey)
 
 	selectedPage = pageKey
 	PanelTemplates_SetTab(workspace, pageIndices[pageKey])
+end
+
+local function PageOnClick(button)
+	SelectPage(pageKeysByButton[button])
+	PlaySound(SOUNDKIT.IG_CHARACTER_INFO_TAB)
 end
 
 local function ShowWorkspace(pageKey)
@@ -111,10 +128,11 @@ local function OpenConfiguredPage()
 end
 
 local function CreatePage(definition, index, previousButton)
-	-- Named PanelTabButtonTemplate children let Blizzard's panel helpers apply the
-	-- familiar selected/unselected tab treatment instead of imitating tabs with
-	-- ordinary push buttons.
-	local button = CreateFrame("Button", "YAAHAAuctionHouseFrameTab" .. index, workspace, "PanelTabButtonTemplate")
+	-- The legacy auction UI does not load AuctionHouseFrameTopTabTemplate. Its
+	-- globally available parent supplies the same native top-tab artwork and lets
+	-- UI skins recognize the standard Blizzard template.
+	local button = CreateFrame("Button", "YAAHAAuctionHouseFrameTab" .. index, workspace,
+		"PanelTopTabButtonTemplate")
 	button:SetID(index)
 	button:SetText(definition.label)
 	PanelTemplates_TabResize(button, 0)
@@ -123,9 +141,8 @@ local function CreatePage(definition, index, previousButton)
 	else
 		button:SetPoint("TOPLEFT", workspace, "TOPLEFT", 14, -68)
 	end
-	button:SetScript("OnClick", function()
-		SelectPage(definition.key)
-	end)
+	pageKeysByButton[button] = definition.key
+	button:SetScript("OnClick", PageOnClick)
 	pageIndices[definition.key] = index
 
 	local page = CreateFrame("Frame", nil, workspace)
@@ -163,9 +180,7 @@ local function CreateWorkspace()
 	optionsButton:SetSize(100, 22)
 	optionsButton:SetPoint("TOPLEFT", workspace, "TOPLEFT", 142, -10)
 	optionsButton:SetText(OPTIONS)
-	optionsButton:SetScript("OnClick", function()
-		addon:OpenConfig()
-	end)
+	optionsButton:SetScript("OnClick", OpenOptions)
 
 	scopeText = workspace:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	scopeText:SetPoint("TOPLEFT", workspace, "TOPLEFT", 14, -42)
@@ -204,11 +219,7 @@ local function CreateWorkspace()
 
 	-- Blizzard's original tab handler remains authoritative for its own pages. The
 	-- post-hook merely removes YAAHA's overlay whenever any original tab is chosen.
-	hooksecurefunc("AuctionFrameTab_OnClick", function(tab)
-		if tab ~= yaahaTab then
-			workspace:Hide()
-		end
-	end)
+	hooksecurefunc("AuctionFrameTab_OnClick", AuctionFrameTabOnClick)
 
 	SelectPage(selectedPage)
 end

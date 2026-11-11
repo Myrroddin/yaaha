@@ -7,7 +7,6 @@ local C_Item = C_Item
 local CreateFrame = CreateFrame
 local ERR_NOT_ENOUGH_MONEY = ERR_NOT_ENOUGH_MONEY
 local format = string.format
-local GameTooltip_Hide = GameTooltip_Hide
 local GetMoney = GetMoney
 local GetTime = GetTime
 local ipairs = ipairs
@@ -56,9 +55,7 @@ local wasScannerBusy
 local updateFrame = CreateFrame("Frame")
 local AdvanceRequest, ContinueAfterCandidate, ContinueResultsLoading, ScheduleSearch
 
-local function SortByProfit(left, right)
-	return left.profit > right.profit
-end
+local SortByProfit = addon.sortByProfit
 
 local function IsDisenchantingDeal(cost, value)
 	return addon:IsBreakdownDeal(cost, value,
@@ -71,13 +68,7 @@ local function SetStatus(text)
 	end
 end
 
-local function ItemKeysEqual(left, right)
-	return left and right
-		and left.itemID == right.itemID
-		and left.itemLevel == right.itemLevel
-		and left.itemSuffix == right.itemSuffix
-		and left.battlePetSpeciesID == right.battlePetSpeciesID
-end
+local ItemKeysEqual = addon.itemKeysEqual
 
 local function GetExpectedValue(itemID)
 	local scope = scanner:GetAuctionScope()
@@ -261,29 +252,6 @@ local function RevalidateCandidate(candidate)
 	return result, buyout, expectedValue
 end
 
-local function OnPopupHyperlinkEnter(popup, link)
-	if popup.yaahaItemID then
-		tooltip:ShowTooltip(popup, link, popup.yaahaItemID, scanner:GetAuctionScope())
-	end
-end
-
-local function OnPopupHide(popup)
-	popup.yaahaItemID = nil
-	GameTooltip_Hide()
-end
-
-local function AttachPopupTooltip(popup, itemID)
-	popup.yaahaItemID = itemID
-	if popup.yaahaTooltipHooked then
-		return
-	end
-	popup.yaahaTooltipHooked = true
-	popup:SetHyperlinksEnabled(true)
-	popup:HookScript("OnHyperlinkEnter", OnPopupHyperlinkEnter)
-	popup:HookScript("OnHyperlinkLeave", GameTooltip_Hide)
-	popup:HookScript("OnHide", OnPopupHide)
-end
-
 local function ShowCandidate(result)
 	if result.quantity ~= 1 or IsOwnItemResult(result) then
 		return false
@@ -313,7 +281,7 @@ local function ShowCandidate(result)
 		currentCandidate = nil
 		return false
 	end
-	AttachPopupTooltip(popup, candidate.itemID)
+	tooltip:AttachPopup(popup, candidate.itemID, scanner:GetAuctionScope())
 	return true
 end
 
@@ -584,6 +552,7 @@ local function OnUpdate(_, elapsed)
 end
 
 function module:OnInitialize()
+	-- Tooltip.lua loads later in the TOC; resolve it after all modules exist.
 	tooltip = addon:GetModule("Tooltip")
 end
 

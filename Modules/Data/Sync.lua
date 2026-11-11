@@ -7,7 +7,6 @@ local FACTION_ALLIANCE = FACTION_ALLIANCE
 local FACTION_HORDE = FACTION_HORDE
 local FACTION_NEUTRAL = FACTION_NEUTRAL
 local GetServerTime = GetServerTime
-local IsInGuild = IsInGuild
 local IsInInstance = IsInInstance
 local LibStub = LibStub
 local max = math.max
@@ -61,6 +60,7 @@ local SYNC_MARKET_FIELDS = {
 local COLLECTOR_KEYS = { "disenchantData", "millingData", "prospectData" }
 local pendingPulls = {}
 local seenPulls = {}
+local syncSessionRevision = 0
 
 local function IsSelf(sender)
 	local normalizedSender = addon:NormalizeCharacterName(sender)
@@ -95,7 +95,9 @@ local function GetScopeDB(auctionHouseType, create)
 end
 
 local function CanSyncNow()
-	return addon.db.profile.syncData and IsInGuild() and not IsInInstance()
+	return addon.db.profile.syncData and addon.isInGuild
+		and type(addon.guildName) == "string" and addon.guildName ~= ""
+		and not IsInInstance()
 end
 
 local function EncodePacket(kind, data)
@@ -106,6 +108,7 @@ local function EncodePacket(kind, data)
 	local serialized = addon:Serialize({
 		version = PROTOCOL_VERSION,
 		kind = kind,
+		guildName = addon.guildName,
 		realmGroup = realmGroup,
 		data = data,
 	})
@@ -125,6 +128,8 @@ local function DecodePacket(text)
 	local decompressed = C_EncodingUtil.DecompressString(decoded, COMPRESSION_METHOD)
 	local success, packet = addon:Deserialize(decompressed)
 	if success and type(packet) == "table" and packet.version == PROTOCOL_VERSION
+		and type(packet.guildName) == "string" and packet.guildName ~= ""
+		and packet.guildName == addon.guildName
 		and packet.realmGroup == addon:GetConnectedRealmKey()
 		and type(packet.kind) == "string" and type(packet.data) == "table" then
 		return packet
@@ -132,6 +137,9 @@ local function DecodePacket(text)
 end
 
 local function SendPacket(kind, data, priority)
+	if not CanSyncNow() then
+		return
+	end
 	local encoded = EncodePacket(kind, data)
 	if encoded then
 		addon:SendCommMessage(COMM_PREFIX, encoded, SYNC_DISTRIBUTION, nil,
@@ -775,12 +783,18 @@ local function ScheduleAdvertisement(sender, requestID)
 		return
 	end
 	seenPulls[requestID] = true
+	local guildName = addon.guildName
+	local sessionRevision = syncSessionRevision
 	C_Timer.After(60, function()
 		seenPulls[requestID] = nil
 	end)
 	-- Advertisements are small summaries. The requester compares every reply before
 	-- asking useful peers for complete retained auction and collector data.
 	C_Timer.After(random(1, 3), function()
+		if sessionRevision ~= syncSessionRevision
+			or guildName ~= addon.guildName or not CanSyncNow() then
+			return
+		end
 		local scopes = BuildAdvertisement()
 		local collectors = BuildCollectorData()
 		local collectorSignature = CollectorSignature(collectors)
@@ -914,6 +928,34 @@ function module:PLAYER_ENTERING_WORLD(_, isInitialLogin)
 	C_Timer.After(INITIAL_PULL_DELAY, RequestInitialPush)
 end
 
+local function ResetSyncSession()
+	-- Guild membership and the option govern communication only. Auction, sales,
+	-- trend, quantity, availability, and collector data remain valid and untouched.
+	syncSessionRevision = syncSessionRevision + 1
+	for requestID, pending in pairs(pendingPulls) do
+		if pending.timer then
+			pending.timer:Cancel()
+		end
+		pendingPulls[requestID] = nil
+	end
+	seenPulls = {}
+	if CanSyncNow() then
+		C_Timer.After(INITIAL_PULL_DELAY, RequestInitialPush)
+	end
+end
+
+function module:YAAHA_GUILD_CHANGED()
+	-- A pending responder or elected sender belongs to the former guild. Reset
+	-- transport state before the new guild can receive an old guild's packet.
+	ResetSyncSession()
+end
+
+function module:YAAHA_SYNC_SETTING_CHANGED()
+	-- Disabling takes effect immediately; enabling begins a clean pull rather than
+	-- reviving a request which was created before the setting changed.
+	ResetSyncSession()
+end
+
 local function OnCommReceived(...)
 	module:OnCommReceived(...)
 end
@@ -927,5 +969,7 @@ function module:OnEnable()
 	addon:RegisterComm(COMM_PREFIX, OnCommReceived)
 	self:RegisterEvent("PLAYER_ENTERING_WORLD")
 	self:RegisterMessage("YAAHA_BREAKDOWN_OBSERVED")
+	self:RegisterMessage("YAAHA_GUILD_CHANGED")
 	self:RegisterMessage("YAAHA_SCAN_PROCESSED")
+	self:RegisterMessage("YAAHA_SYNC_SETTING_CHANGED")
 end

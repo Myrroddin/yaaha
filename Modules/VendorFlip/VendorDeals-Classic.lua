@@ -10,7 +10,6 @@ local ERR_AUCTION_BID_PLACED = ERR_AUCTION_BID_PLACED
 local ERR_NOT_ENOUGH_MONEY = ERR_NOT_ENOUGH_MONEY
 local floor = math.floor
 local format = string.format
-local GameTooltip_Hide = GameTooltip_Hide
 local GetAuctionItemInfo = GetAuctionItemInfo
 local GetAuctionItemLink = GetAuctionItemLink
 local GetItemInfo = C_Item.GetItemInfo
@@ -34,7 +33,7 @@ local auctionHouseUI = addon:GetModule("AuctionHouseUI")
 local dataProcessing = addon:GetModule("DataProcessing")
 local scanner = addon:GetModule("Scanner")
 local saleCollector = addon:GetModule("SaleCollector")
-local tooltip = addon:GetModule("Tooltip")
+local tooltip
 local L = LibStub("AceLocale-3.0"):GetLocale("YAAHA")
 
 local POPUP_NAME = "YAAHA_VENDOR_FLIP"
@@ -52,9 +51,7 @@ local pendingListingIndex, pendingListingItemID, pendingListingPage
 local pendingPurchase
 local queue, queueIndex
 
-local function SortByBestProfit(left, right)
-	return left.bestProfit > right.bestProfit
-end
+local SortByBestProfit = addon.sortByBestProfit
 local running, searchPending, transactionPending, waitingForItemInfo, waitingForRequestItemInfo, waitingForResults
 local resumePage, transactionListUpdated, waitingForPurchaseRefresh
 local listingItemInfoAttempts, queryAttempts, requestItemInfoAttempts = 0, 0, 0
@@ -307,10 +304,6 @@ function ContinueAfterCandidate(requery)
 	end
 end
 
-function module:ShowItemTooltip(owner, link, itemID)
-	tooltip:ShowTooltip(owner, link, itemID, scanner:GetAuctionScope())
-end
-
 local function RevalidateCandidate(candidate, action)
 	local listing = ReadListing(candidate.index)
 	if not listing or listing.itemID ~= candidate.itemID or listing.count ~= candidate.count
@@ -440,23 +433,7 @@ local function ShowCandidate(listing)
 		currentCandidate = nil
 		return false
 	end
-	popup.yaahaItemID = listing.itemID
-	popup.yaahaItemLink = listing.link
-	if not popup.yaahaTooltipHooked then
-		popup.yaahaTooltipHooked = true
-		popup:SetHyperlinksEnabled(true)
-		popup:HookScript("OnHyperlinkEnter", function(self, link)
-			if self.yaahaItemID then
-				module:ShowItemTooltip(self, link, self.yaahaItemID)
-			end
-		end)
-		popup:HookScript("OnHyperlinkLeave", GameTooltip_Hide)
-		popup:HookScript("OnHide", function(self)
-			self.yaahaItemID = nil
-			self.yaahaItemLink = nil
-			GameTooltip_Hide()
-		end)
-	end
+	tooltip:AttachPopup(popup, listing.itemID, scanner:GetAuctionScope())
 	return true
 end
 
@@ -734,6 +711,88 @@ StaticPopupDialogs[POPUP_NAME] = {
 	hideOnEscape = false,
 }
 
+function module:OnInitialize()
+	-- Tooltip.lua loads later in the TOC; resolve it after all modules exist.
+	tooltip = addon:GetModule("Tooltip")
+end
+
+local function OnUpdate(_, elapsed)
+	statusElapsed = statusElapsed + elapsed
+	if statusElapsed >= 0.2 then
+		statusElapsed = 0
+		local scannerBusy = scanner:IsScanning()
+		if scannerBusy then
+			if running then
+				StopVendorFlips(L["Vendor flip search stopped for auction processing."])
+			end
+			actionButton:Disable()
+			restartButton:Disable()
+			if dataProcessing:IsProcessing() then
+				local processed, total = dataProcessing:GetProgress()
+				SetStatus(format(L["Building deal caches: %d/%d steps."], processed, total))
+			else
+				SetStatus(L["Waiting for auction scan results..."])
+			end
+		elseif wasScannerBusy then
+			actionButton:Enable()
+			restartButton:Enable()
+			ShowCacheReady()
+		end
+		wasScannerBusy = scannerBusy
+	end
+
+	if running and transactionPending and GetTime() >= transactionDeadline then
+		ResolveTransaction(false, false)
+	elseif running and waitingForPurchaseRefresh and GetTime() >= transactionDeadline then
+		-- If Classic never publishes the post-purchase refresh, recover with a
+		-- focused query rather than leaving the workflow stalled.
+		waitingForPurchaseRefresh = false
+		transactionDeadline = nil
+		currentPage = 0
+		nextResultIndex = 1
+		ScheduleSearch()
+	elseif running and resumePage then
+		resumePage = false
+		module:ProcessCurrentPage()
+	end
+	if running and waitingForResults and searchListUpdated then
+		ConsumeSearchResults()
+	end
+	if running and waitingForRequestItemInfo and GetTime() >= searchDeadline then
+		if requestItemInfoAttempts < QUERY_RETRY_LIMIT then
+			WaitForRequestItemInfo(currentRequest)
+		else
+			waitingForRequestItemInfo = false
+			requestItemInfoAttempts = 0
+			AdvanceRequest()
+		end
+	elseif running and not transactionPending and searchPending and not waitingForResults then
+		local canQuery = CanSendAuctionQuery()
+		if canQuery then
+			searchPending = false
+			searchListUpdated = false
+			waitingForResults = true
+			queryAttempts = queryAttempts + 1
+			searchDeadline = GetTime() + QUERY_TIMEOUT
+			QueryAuctionItems(currentRequest.name, nil, nil, currentPage, false, nil, false, true, nil)
+		elseif GetTime() >= searchDeadline then
+			-- A throttle is not proof that the candidate is gone. Keep waiting for
+			-- permission rather than silently skipping it.
+			ScheduleSearch()
+		end
+	elseif running and waitingForItemInfo and GetTime() >= searchDeadline then
+		RetryOrSkipPendingListing()
+	elseif running and waitingForResults and GetTime() >= searchDeadline then
+		waitingForResults = false
+		if queryAttempts < QUERY_RETRY_LIMIT then
+			ScheduleSearch()
+		else
+			SetStatus(L["Vendor search timed out; continuing."])
+			AdvanceRequest()
+		end
+	end
+end
+
 function module:OnEnable()
 	self:RegisterEvent("AUCTION_HOUSE_SHOW")
 	self:RegisterEvent("AUCTION_HOUSE_CLOSED")
@@ -743,82 +802,7 @@ function module:OnEnable()
 	self:RegisterEvent("UI_ERROR_MESSAGE")
 	self:RegisterMessage("YAAHA_VENDOR_CACHE_READY")
 	self:RegisterMessage("YAAHA_DEAL_SEARCH_STARTED")
-	updateFrame:SetScript("OnUpdate", function(_, elapsed)
-		statusElapsed = statusElapsed + elapsed
-		if statusElapsed >= 0.2 then
-			statusElapsed = 0
-			local scannerBusy = scanner:IsScanning()
-			if scannerBusy then
-				if running then
-					StopVendorFlips(L["Vendor flip search stopped for auction processing."])
-				end
-				actionButton:Disable()
-				restartButton:Disable()
-				if dataProcessing:IsProcessing() then
-					local processed, total = dataProcessing:GetProgress()
-					SetStatus(format(L["Building deal caches: %d/%d steps."], processed, total))
-				else
-					SetStatus(L["Waiting for auction scan results..."])
-				end
-			elseif wasScannerBusy then
-				actionButton:Enable()
-				restartButton:Enable()
-				ShowCacheReady()
-			end
-			wasScannerBusy = scannerBusy
-		end
-
-		if running and transactionPending and GetTime() >= transactionDeadline then
-			ResolveTransaction(false, false)
-		elseif running and waitingForPurchaseRefresh and GetTime() >= transactionDeadline then
-			-- If Classic never publishes the post-purchase refresh, recover with a
-			-- focused query rather than leaving the workflow stalled.
-			waitingForPurchaseRefresh = false
-			transactionDeadline = nil
-			currentPage = 0
-			nextResultIndex = 1
-			ScheduleSearch()
-		elseif running and resumePage then
-			resumePage = false
-			self:ProcessCurrentPage()
-		end
-		if running and waitingForResults and searchListUpdated then
-			ConsumeSearchResults()
-		end
-		if running and waitingForRequestItemInfo and GetTime() >= searchDeadline then
-			if requestItemInfoAttempts < QUERY_RETRY_LIMIT then
-				WaitForRequestItemInfo(currentRequest)
-			else
-				waitingForRequestItemInfo = false
-				requestItemInfoAttempts = 0
-				AdvanceRequest()
-			end
-		elseif running and not transactionPending and searchPending and not waitingForResults then
-			local canQuery = CanSendAuctionQuery()
-			if canQuery then
-				searchPending = false
-				searchListUpdated = false
-				waitingForResults = true
-				queryAttempts = queryAttempts + 1
-				searchDeadline = GetTime() + QUERY_TIMEOUT
-				QueryAuctionItems(currentRequest.name, nil, nil, currentPage, false, nil, false, true, nil)
-			elseif GetTime() >= searchDeadline then
-				-- A throttle is not proof that the candidate is gone. Keep waiting for
-				-- permission rather than silently skipping it.
-				ScheduleSearch()
-			end
-		elseif running and waitingForItemInfo and GetTime() >= searchDeadline then
-			RetryOrSkipPendingListing()
-		elseif running and waitingForResults and GetTime() >= searchDeadline then
-			waitingForResults = false
-			if queryAttempts < QUERY_RETRY_LIMIT then
-				ScheduleSearch()
-			else
-				SetStatus(L["Vendor search timed out; continuing."])
-				AdvanceRequest()
-			end
-		end
-	end)
+	updateFrame:SetScript("OnUpdate", OnUpdate)
 end
 
 function module:YAAHA_DEAL_SEARCH_STARTED(_, dealType)

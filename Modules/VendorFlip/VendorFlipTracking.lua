@@ -16,7 +16,6 @@ local GetTradePlayerItemInfo = GetTradePlayerItemInfo
 local GetTradePlayerItemLink = GetTradePlayerItemLink
 local GetTradeTargetItemInfo = GetTradeTargetItemInfo
 local GetTradeTargetItemLink = GetTradeTargetItemLink
-local GetUnitName = GetUnitName
 local hooksecurefunc = hooksecurefunc
 local LE_GAME_ERR_TRADE_COMPLETE = LE_GAME_ERR_TRADE_COMPLETE
 local LibStub = LibStub
@@ -222,7 +221,8 @@ local function CaptureTrade()
 		moneyGiven = GetPlayerTradeMoney(),
 		moneyReceived = GetTargetTradeMoney(),
 		outgoing = ReadTradeItems(GetTradePlayerItemInfo, GetTradePlayerItemLink),
-		target = GetUnitName("NPC", true) or GetUnitName("target", true),
+		target = addon:GetUnitCharacterName("NPC")
+			or addon:GetUnitCharacterName("target"),
 	}
 end
 

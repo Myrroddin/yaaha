@@ -14,7 +14,7 @@ leaves the installation incomplete.
 
 - Fast auction-house scans with minimum bids, minimum buyouts, quantities, and market values covering the current scan and rolling 3, 7, 14, 30, and 60-day periods.
 - Configurable item tooltips with auction prices, trends, vendor values, inventory purchase values, crafting costs, conversions, and material breakdowns.
-- Crafting costs which compare current market prices, vendor supplies, known recipes, conversions, and supported special material valuations. Applicable Alchemy specializations and recipe bonuses are included.
+- Crafting costs which compare current market prices, vendor supplies, known recipes, conversions, and supported special material valuations. Applicable Alchemy bonuses and Retail Resourcefulness and Multicraft expectations are included.
 - Disenchanting, prospecting, and milling estimates where those professions are available.
 - Guided vendor-flip, disenchanting, prospecting, and milling deal searches, with configurable value thresholds. YAAHA never purchases an item without the player's action.
 - Rolling 60-day personal sales information across the player's realm, plus market-specific realm statistics.

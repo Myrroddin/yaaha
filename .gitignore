@@ -448,6 +448,8 @@ obj/
 out/
 packages/
 node_modules/
+/tools/
+/tests/
 
 # Local installer / package artifacts
 *.vsix
