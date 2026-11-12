@@ -1,25 +1,32 @@
 # YAAHA
 
-YAAHA (Yet Another Auction House AddOn) helps World of Warcraft players understand prices, evaluate crafting costs, and find worthwhile auction-house deals without becoming a full TradeSkillMaster replacement.
+YAAHA (Yet Another Auction House AddOn) helps World of Warcraft players understand market prices, evaluate crafting costs, and find worthwhile auction-house deals.
 
 > [!IMPORTANT]
 > YAAHA is under active development and is not yet ready for a public release. Features, settings, and saved data may change while the addon is being built.
 
-YAAHA requires both addon folders included in its release: `YAAHA` provides the
-features and interface, while `YAAHA_AuctionDB` owns the market-value and trend
-database in its own saved-variable file. Disabling or removing either folder
-leaves the installation incomplete.
+YAAHA requires both folders included in its release. `YAAHA` provides the
+features and interface, while `YAAHA_AuctionDB` stores market values and price
+history separately from personal settings and activity. Disabling or removing
+either folder leaves the installation incomplete.
+
+## Approach
+
+YAAHA favors current, observable information and keeps distinct auction-house
+markets separate. Unknown prices remain unknown rather than being silently
+invented or borrowed from another market. Values are presented per item by
+default, and every bid or purchase remains under the player's control.
 
 ## Features
 
-- Fast auction-house scans with minimum bids, minimum buyouts, quantities, and market values covering the current scan and rolling 3, 7, 14, 30, and 60-day periods.
-- Configurable item tooltips with auction prices, trends, vendor values, inventory purchase values, crafting costs, conversions, and material breakdowns.
-- Crafting costs which compare current market prices, vendor supplies, known recipes, conversions, and supported special material valuations. Applicable Alchemy bonuses and Retail Resourcefulness and Multicraft expectations are included.
+- Auction-house scans with minimum bids, minimum buyouts, quantities, current market values, and rolling 3, 7, 14, 30, and 60-day trends.
+- Configurable item tooltips covering auction prices, vendor values, inventory purchase values, crafting and reagent costs, conversions, and material breakdowns.
+- Crafting costs which compare available market, vendor, recipe, conversion, and supported derived-material paths. Applicable Alchemy bonuses and Retail Resourcefulness and Multicraft expectations are included.
 - Disenchanting, prospecting, and milling estimates where those professions are available.
-- Guided vendor-flip, disenchanting, prospecting, and milling deal searches, with configurable value thresholds. YAAHA never purchases an item without the player's action.
-- Rolling 60-day personal sales information across the player's realm, plus market-specific realm statistics.
-- Optional guild synchronization of supported market and learned breakdown data. Personal activity and vendor-flip profit remain private.
-- An optional minimap button and LibDataBroker display showing accumulated vendor-flip profit.
+- Vendor-flip, disenchanting, prospecting, and milling deal searches with configurable thresholds.
+- Rolling 60-day personal sales information and market-specific realm sales metrics.
+- Optional guild synchronization of supported market, realm-sale, and learned breakdown data with eligible guild members. Personal activity and vendor-flip profit remain private.
+- An optional minimap or Broker display showing accumulated vendor-flip profit.
 
 ## Supported game versions
 
@@ -30,7 +37,9 @@ YAAHA's current auction-house workflow supports:
 - The Burning Crusade Classic
 - Wrath of the Lich King Classic and Titan Reforged
 
-Support for Mists of Pandaria Classic and Retail (mainline), including their shared auction-house and commodity systems, is under development and is not yet complete.
+Support for Mists of Pandaria Classic and Retail, including their shared
+auction-house and commodity systems, remains under active development and
+testing.
 
 ## Getting started
 
@@ -39,7 +48,11 @@ Support for Mists of Pandaria Classic and Retail (mainline), including their sha
 3. Open relevant merchants to refresh prices for vendor-supplied crafting materials.
 4. Hover over items to view the enabled YAAHA tooltip information.
 
-YAAHA displays item prices, costs, and breakdown values per individual item by default. Prospecting and milling therefore show one-fifth of a complete five-item operation. Hold **Shift** while viewing an item tooltip to multiply applicable values by the stack size. On faction-based clients, **Alt** shows Neutral auction-house data and **Ctrl** shows opposite-faction data when available.
+YAAHA displays prices, costs, and breakdown values per individual item.
+Prospecting and milling therefore show one-fifth of a complete five-item
+operation. Hold **Shift** while viewing an item tooltip to multiply applicable
+values by the stack size. On faction-based clients, **Alt** shows Neutral
+auction-house data and **Ctrl** shows opposite-faction data when available.
 
 ## Options
 

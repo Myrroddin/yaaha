@@ -12,10 +12,12 @@ local GetServerTime = GetServerTime
 local GetTime = GetTime
 local hooksecurefunc = hooksecurefunc
 local LibStub = LibStub
+local next = next
 local pairs = pairs
 local QueryAuctionItems = QueryAuctionItems
 local strsplit = strsplit
 local tonumber = tonumber
+local type = type
 
 local addon = LibStub("AceAddon-3.0"):GetAddon("YAAHA")
 local isWrath = addon.isWrath
@@ -288,10 +290,31 @@ local function BeginScan(scope)
 	return true
 end
 
-local function ObserveLegacyFullScan(_, _, _, _, _, _, getAll)
-	-- Classic page and item searches are incomplete snapshots. Only adopt the
-	-- explicit getAll request used by YAAHA, Zygor, Auctioneer, and similar scanners.
-	if getAll then
+local function IsEmptyFilterData(filterData)
+	return filterData == nil or type(filterData) == "table" and next(filterData) == nil
+end
+
+local function IsUnfilteredLegacyFullScan(name, minLevel, maxLevel, page, isUsable, qualityIndex, getAll, exactMatch, filterData)
+	if not getAll or getAll == 0 or name and name ~= "" then
+		return false
+	end
+	if (tonumber(minLevel) or 0) > 0 or (tonumber(maxLevel) or 0) > 0 then
+		return false
+	end
+	if (tonumber(page) or 0) ~= 0 or isUsable and isUsable ~= 0 then
+		return false
+	end
+	if (tonumber(qualityIndex) or 0) > 0 or exactMatch and exactMatch ~= 0 then
+		return false
+	end
+
+	return IsEmptyFilterData(filterData)
+end
+
+local function ObserveLegacyFullScan(name, minLevel, maxLevel, page, isUsable, qualityIndex, getAll, exactMatch, filterData)
+	-- getAll can still carry a name or category filter. Adopting such a request as
+	-- the complete market would erase current values for every item outside it.
+	if IsUnfilteredLegacyFullScan(name, minLevel, maxLevel, page, isUsable, qualityIndex, getAll, exactMatch, filterData) then
 		externalFullScanObserved = true
 		scanDeadline = GetTime() + SCAN_RESPONSE_TIMEOUT
 		BeginScan(auctionScope)

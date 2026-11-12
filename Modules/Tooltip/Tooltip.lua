@@ -329,11 +329,15 @@ function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 	local settings = addon.db.profile.tooltip
 	local breakdown = (settings["10-breakdownValue"] or settings["11-breakdownResults"])
 		and breakdownData:GetValue(itemID, priceScope, scopeDB.auctionDB) or nil
-	local conversion = (settings["21-conversionValue"] or settings["22-conversionResults"])
+	local conversion = (settings["22-conversionValue"] or settings["23-conversionResults"])
 		and convertData:GetValue(itemID, priceScope, scopeDB.auctionDB) or nil
 	local inventoryBuy = inventoryAverageBuy:GetValue(itemID)
 	local allowAlchemySpecialization = usesSharedAuctionHouse
 		or activeScope == "factionrealm"
+	local knownReagent = settings["21-reagentCost"]
+		and professionScanner:IsKnownReagent(itemID)
+	local reagentCost = knownReagent and professionScanner:GetMaterialCost(
+		itemID, scopeDB.auctionDB, false, allowAlchemySpecialization)
 	local factionCrafting = professionScanner:GetItemCrafting(
 		itemID, scopeDB.auctionDB, false, allowAlchemySpecialization)
 	local knownCraft = professionScanner:IsItemKnown(itemID, false)
@@ -342,7 +346,8 @@ function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 		saleCollector:GetRealmRollingSaleMetrics(itemID, auctionHouseType)
 	local _, _, _, _, _, _, _, _, _, _, vendorSell = C_Item.GetItemInfo(itemID)
 	local vendorBuy = addon.db.global.vendorBuyPrices[itemID]
-	if not data and not breakdown and not conversion and not inventoryBuy and not knownCraft
+	if not data and not breakdown and not conversion and not inventoryBuy
+		and not knownCraft and not knownReagent
 		and personalRollingSaleRate == nil and realmRollingSaleRate == nil
 		and realmRollingSalesPerDay == nil and not vendorSell and not vendorBuy then
 		return
@@ -412,6 +417,11 @@ function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 			FormatCraftingValue(factionCrafting, multiplier, data, auctionCut))
 	end
 	AddCraftingLines(lineState, factionCrafting, settings["20-craftingResults"], multiplier)
+	if knownReagent then
+		AddTooltipLine(lineState, PROFESSIONS_CRAFTING, L["Reagent cost"],
+			reagentCost and reagentCost.value
+				and addon:FormatMoney(reagentCost.value * multiplier) or "--")
+	end
 
 	if breakdown and settings["11-breakdownResults"] then
 		for index = 1, #breakdown.results do
@@ -439,11 +449,11 @@ function module:AddItemData(tooltip, itemID, scope, suppressRefresh)
 			expectedValue and addon:FormatMoney(expectedValue, true) or "--")
 	end
 
-	if conversion and settings["21-conversionValue"] then
+	if conversion and settings["22-conversionValue"] then
 		AddTooltipLine(lineState, L["Conversion"], L["Conversion cost"],
 			conversion.value and addon:FormatMoney(conversion.value * multiplier, true) or "--")
 	end
-	if conversion and settings["22-conversionResults"] then
+	if conversion and settings["23-conversionResults"] then
 		for index = 1, #conversion.results do
 			local result = conversion.results[index]
 			local sourceName, sourceLink = C_Item.GetItemInfo(result.itemID)

@@ -343,8 +343,9 @@ function addon:GetOptions()
 								L["Average gross per-unit auction sale value in this market during the rolling 60-day window."]),
 							["19-craftingValue"] = CreateTooltipToggle(190, L["Crafting cost"]),
 							["20-craftingResults"] = CreateTooltipToggle(200, L["Crafting breakdown"]),
-							["21-conversionValue"] = CreateTooltipToggle(210, L["Conversion cost"]),
-							["22-conversionResults"] = CreateTooltipToggle(220, L["Full conversion breakdown"]),
+							["21-reagentCost"] = CreateTooltipToggle(210, L["Reagent cost"]),
+							["22-conversionValue"] = CreateTooltipToggle(220, L["Conversion cost"]),
+							["23-conversionResults"] = CreateTooltipToggle(230, L["Full conversion breakdown"]),
 						}
 					}
 				}

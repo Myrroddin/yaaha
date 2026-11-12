@@ -206,6 +206,7 @@ local defaults = {
 			["03-currentMarketValue"] = true,
 			["04-midweekMarketValue"] = true,
 			["12-vendorSell"] = true,
+			["19-craftingValue"] = true,
 			["*"] = false,
 		},
 	},
